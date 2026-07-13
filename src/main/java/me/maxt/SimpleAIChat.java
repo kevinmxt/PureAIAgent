@@ -1,12 +1,17 @@
 package me.maxt;
 
+import me.maxt.model.Dialog;
+
 import java.io.BufferedReader;
 import java.io.InputStreamReader;
+import java.io.StringWriter;
 import java.net.URI;
 import java.net.http.HttpClient;
 import java.net.http.HttpRequest;
 import java.net.http.HttpResponse;
 import java.nio.charset.StandardCharsets;
+import java.util.ArrayList;
+import java.util.List;
 import java.util.Scanner;
 
 /**
@@ -31,7 +36,12 @@ public class SimpleAIChat {
     // 系统提示词（定义AI的角色和行为）
     private static final String SYSTEM_PROMPT = "你是一个友好、有帮助的AI助手。请用简洁清晰的中文回答问题。";
 
-    private static final boolean STREAM = false;
+    private static final boolean STREAM = true;
+
+    /**
+     * 对话历史
+     */
+    private static final List<Dialog> DIALOGS = new ArrayList<>();
 
     // ============ 主程序 ============
 
@@ -46,9 +56,6 @@ public class SimpleAIChat {
                 .version(HttpClient.Version.HTTP_1_1)
                 .build()) {
 
-            // 对话历史记录（用于多轮对话）
-            StringBuilder conversationHistory = new StringBuilder();
-            conversationHistory.append("系统: ").append(SYSTEM_PROMPT).append("\n");
 
             // 读取用户输入
             try (Scanner scanner = new Scanner(System.in)) {
@@ -66,9 +73,9 @@ public class SimpleAIChat {
                     }
 
                     if (STREAM) {
-                        streamChat(httpClient, conversationHistory, userInput);
+                        streamChat(httpClient, userInput);
                     } else {
-                        commonResponse(httpClient, conversationHistory, userInput);
+                        commonResponse(httpClient, userInput);
                     }
                 }
             }
@@ -79,14 +86,11 @@ public class SimpleAIChat {
         }
     }
 
-    private static void commonResponse(HttpClient httpClient, StringBuilder conversationHistory, String userInput) throws Exception {
+    private static void commonResponse(HttpClient httpClient, String userInput) throws Exception {
         // 发送请求并获取回复
-        String aiResponse = chat(httpClient, conversationHistory.toString(), userInput);
+        String aiResponse = chat(httpClient, userInput);
 
-        // 更新对话历史
-        conversationHistory.append("用户: ").append(userInput).append("\n");
-        conversationHistory.append("AI: ").append(aiResponse).append("\n");
-
+        DIALOGS.add(new Dialog(userInput, aiResponse));
         // 显示AI回复
         System.out.println("AI: " + aiResponse);
     }
@@ -95,11 +99,10 @@ public class SimpleAIChat {
      * 发送对话请求到AI接口
      *
      * @param client HTTP客户端
-     * @param history 对话历史
      * @param userMessage 用户新消息
      * @return AI的回复文本
      */
-    private static String chat(HttpClient client, String history, String userMessage) throws Exception {
+    private static String chat(HttpClient client, String userMessage) throws Exception {
         // 构建符合OpenAI格式的请求体
         String requestBody = buildRequestBody(userMessage);
 
@@ -130,9 +133,12 @@ public class SimpleAIChat {
      * @return JSON格式的请求体
      */
     private static String buildRequestBody(String userMessage) {
+
         // 对用户消息进行简单的JSON转义
         String escapedMessage = escapeJson(userMessage);
         String escapedSystem = escapeJson(SYSTEM_PROMPT);
+
+        String messages = buildMessages(escapedMessage);
 
         // 手动构建JSON（最简单的方式，无需第三方库）
         return """
@@ -140,13 +146,23 @@ public class SimpleAIChat {
                 "model": "%s",
                 "messages": [
                     {"role": "system", "content": "%s"},
-                    {"role": "user", "content": "%s"}
+                    %s
                 ],
                 "temperature": 0.7,
                 "max_tokens": 1000,
                 "stream": %b
             }
-            """.formatted(MODEL_NAME, escapedSystem, escapedMessage, STREAM);
+            """.formatted(MODEL_NAME, escapedSystem, messages, STREAM);
+    }
+
+    private static String buildMessages(String userMessage) {
+        StringBuilder sb = new StringBuilder();
+        for (Dialog dialog : DIALOGS) {
+            sb.append("{\"role\": \"user\", \"content\": \"").append(dialog.getUser()).append("\"},");
+            sb.append("{\"role\": \"assistant\", \"content\": \"").append(dialog.getAi()).append("\"},");
+        }
+        sb.append("{\"role\": \"user\", \"content\": \"").append(userMessage).append("\"}");
+        return  sb.toString();
     }
 
     /**
@@ -169,7 +185,7 @@ public class SimpleAIChat {
             contentStart += contentTag.length();
             int contentEnd = contentStart;
 
-            // 处理转义字符，找到真正的结束引号
+            // 处理转义字符，找到真正地结束引号
             boolean escaped = false;
             while (contentEnd < responseBody.length()) {
                 char c = responseBody.charAt(contentEnd);
@@ -234,7 +250,7 @@ public class SimpleAIChat {
      * @param client HTTP客户端
      * @param userMessage 用户消息
      */
-    private static void streamChat(HttpClient client, StringBuilder history, String userMessage) throws Exception {
+    private static void streamChat(HttpClient client, String userMessage) throws Exception {
         String requestBody = buildRequestBody(userMessage);
 
         HttpRequest request = HttpRequest.newBuilder()
@@ -255,6 +271,8 @@ public class SimpleAIChat {
             return;
         }
 
+        System.out.print("AI: ");
+        StringBuilder history = new StringBuilder();
         // 逐行读取SSE流
         try (BufferedReader reader = new BufferedReader(
                 new InputStreamReader(response.body(), StandardCharsets.UTF_8))) {
@@ -274,10 +292,12 @@ public class SimpleAIChat {
                     String content = extractStreamContent(data);
                     if (content != null && !content.isEmpty()) {
                         System.out.print(content);
+                        history.append(content);
                     }
                 }
             }
         }
+        DIALOGS.add(new Dialog(userMessage, history.toString()));
     }
 
     /**
