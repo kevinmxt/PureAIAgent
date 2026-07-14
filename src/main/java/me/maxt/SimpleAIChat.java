@@ -1,6 +1,12 @@
 package me.maxt;
 
-import me.maxt.model.Dialog;
+import com.fasterxml.jackson.core.type.TypeReference;
+import com.fasterxml.jackson.databind.JsonNode;
+import com.fasterxml.jackson.databind.ObjectMapper;
+import com.fasterxml.jackson.databind.node.ArrayNode;
+import com.fasterxml.jackson.databind.node.ObjectNode;
+import me.maxt.model.Message;
+import me.maxt.model.ToolCall;
 
 import java.io.BufferedReader;
 import java.io.InputStreamReader;
@@ -15,33 +21,21 @@ import java.util.Scanner;
 
 /**
  * 最简单的AI对话程序
- * 使用JDK21原生HTTP客户端，不依赖任何第三方框架
+ * 使用JDK21原生HTTP客户端 + Jackson JSON解析
  * 支持OpenAI兼容接口（可接入各种大模型API）
  */
 public class SimpleAIChat {
 
     // ============ 配置区域 ============
-    // 请替换为你自己的API配置
 
-    // API地址（支持OpenAI、DeepSeek、智谱等兼容接口）
     private static final String API_URL = "https://api.deepseek.com/chat/completions";
-
-    // API密钥（请替换为你自己的密钥）
     private static final String API_KEY = System.getenv("OPENAI_API_KEY");
-
-    // 模型名称
     private static final String MODEL_NAME = "deepseek-v4-flash";
-
-    // 系统提示词（定义AI的角色和行为）
     private static final String SYSTEM_PROMPT = "你是一个友好、有帮助的AI助手。请用简洁清晰的中文回答问题。";
-
     private static final boolean STREAM = false;
 
-    /**
-     * 对话历史
-     */
-    private static final List<Dialog> DIALOGS = new ArrayList<>();
-
+    private static final ObjectMapper MAPPER = new ObjectMapper();
+    private static final List<Message> MESSAGES = new ArrayList<>();
     private static final List<String> RESPONSES = new ArrayList<>();
 
     // ============ 主程序 ============
@@ -54,19 +48,15 @@ public class SimpleAIChat {
         System.out.println("  输入 'debug' 查看调试信息");
         System.out.println("=================================\n");
 
-        // 创建HTTP客户端（使用虚拟线程，提升性能）
         try (HttpClient httpClient = HttpClient.newBuilder()
                 .version(HttpClient.Version.HTTP_1_1)
                 .build()) {
 
-
-            // 读取用户输入
             try (Scanner scanner = new Scanner(System.in)) {
                 while (true) {
                     System.out.print("\n你: ");
                     String userInput = scanner.nextLine().trim();
 
-                    // 检查退出条件
                     if (userInput.isEmpty()) {
                         continue;
                     }
@@ -75,7 +65,7 @@ public class SimpleAIChat {
                         break;
                     }
                     if ("对话历史".equals(userInput) || "history".equalsIgnoreCase(userInput)) {
-                        System.out.println(DIALOGS);
+                        System.out.println(MESSAGES);
                         continue;
                     }
                     if ("debug".equals(userInput)) {
@@ -97,175 +87,26 @@ public class SimpleAIChat {
         }
     }
 
+    // ============ 非流式对话 ============
+
     private static void commonResponse(HttpClient httpClient, String userInput) throws Exception {
-        // 发送请求并获取回复
-        String aiResponse = chat(httpClient, userInput);
+        MESSAGES.add(new Message("user", userInput));
+        Message assistantMsg = sendChatRequest(httpClient);
+        MESSAGES.add(assistantMsg);
 
-        DIALOGS.add(new Dialog(userInput, aiResponse));
-        // 显示AI回复
-        System.out.println("AI: " + aiResponse);
-    }
-
-    /**
-     * 发送对话请求到AI接口
-     *
-     * @param client HTTP客户端
-     * @param userMessage 用户新消息
-     * @return AI的回复文本
-     */
-    private static String chat(HttpClient client, String userMessage) throws Exception {
-        // 构建符合OpenAI格式的请求体
-        String requestBody = buildRequestBody(userMessage);
-
-        // 创建HTTP请求
-        HttpRequest request = HttpRequest.newBuilder()
-                .uri(URI.create(API_URL))
-                .header("Content-Type", "application/json")
-                .header("Authorization", "Bearer " + API_KEY)
-                .POST(HttpRequest.BodyPublishers.ofString(requestBody, StandardCharsets.UTF_8))
-                .build();
-
-        // 发送请求（使用同步方式，简单直接）
-        HttpResponse<String> response = client.send(request, HttpResponse.BodyHandlers.ofString());
-
-        // 检查响应状态
-        if (response.statusCode() == 200) {
-            return extractContent(response.body());
-        } else {
-            return "API错误 (状态码: " + response.statusCode() + "): " + response.body();
+        if (assistantMsg.getReasoningContent() != null && !assistantMsg.getReasoningContent().isEmpty()) {
+            System.out.println("[思考过程] " + assistantMsg.getReasoningContent());
+            System.out.println("---");
         }
+        System.out.println("AI: " + (assistantMsg.getContent() != null ? assistantMsg.getContent() : ""));
     }
 
-    /**
-     * 构建请求体JSON字符串
-     * 使用简单字符串拼接（避免引入JSON库）
-     *
-     * @param userMessage 用户消息
-     * @return JSON格式的请求体
-     */
-    private static String buildRequestBody(String userMessage) {
+    // ============ 流式对话 ============
 
-        // 对用户消息进行简单的JSON转义
-        String escapedMessage = escapeJson(userMessage);
-        String escapedSystem = escapeJson(SYSTEM_PROMPT);
-
-        String messages = buildMessages(escapedMessage);
-
-        // 手动构建JSON（最简单的方式，无需第三方库）
-        return """
-            {
-                "model": "%s",
-                "messages": [
-                    {"role": "system", "content": "%s"},
-                    %s
-                ],
-                "user_id": "km",
-                "temperature": 0.7,
-                "max_tokens": 1000,
-                "stream": %b
-            }
-            """.formatted(MODEL_NAME, escapedSystem, messages, STREAM);
-    }
-
-    private static String buildMessages(String userMessage) {
-        StringBuilder sb = new StringBuilder();
-        for (Dialog dialog : DIALOGS) {
-            sb.append("{\"role\": \"user\", \"content\": \"").append(dialog.getUser()).append("\"},");
-            sb.append("{\"role\": \"assistant\", \"content\": \"").append(dialog.getAi()).append("\"},");
-        }
-        sb.append("{\"role\": \"user\", \"content\": \"").append(userMessage).append("\"}");
-        return  sb.toString();
-    }
-
-    /**
-     * 从API响应中提取AI回复内容
-     * 使用简单的字符串截取（不使用JSON解析库）
-     *
-     * @param responseBody API返回的JSON字符串
-     * @return 提取的内容文本
-     */
-    private static String extractContent(String responseBody) {
-        try {
-            RESPONSES.add(responseBody);
-            // 查找content字段的位置
-            String contentTag = "\"content\":\"";
-            int contentStart = responseBody.indexOf(contentTag);
-            if (contentStart == -1) {
-                return "无法解析的响应格式";
-            }
-
-            // 从content字段开始位置截取
-            contentStart += contentTag.length();
-            int contentEnd = contentStart;
-
-            // 处理转义字符，找到真正地结束引号
-            boolean escaped = false;
-            while (contentEnd < responseBody.length()) {
-                char c = responseBody.charAt(contentEnd);
-                if (escaped) {
-                    escaped = false;
-                } else if (c == '\\') {
-                    escaped = true;
-                } else if (c == '"') {
-                    break;
-                }
-                contentEnd++;
-            }
-
-            // 提取内容并还原转义字符
-            String content = responseBody.substring(contentStart, contentEnd);
-            return unescapeJson(content);
-
-        } catch (Exception e) {
-            return "解析响应出错: " + e.getMessage();
-        }
-    }
-
-    /**
-     * 简单的JSON字符串转义
-     * 处理可能导致JSON格式错误的特殊字符
-     *
-     * @param text 原始文本
-     * @return 转义后的文本
-     */
-    private static String escapeJson(String text) {
-        if (text == null) {
-            return "";
-        }
-        return text.replace("\\", "\\\\")
-                .replace("\"", "\\\"")
-                .replace("\n", "\\n")
-                .replace("\r", "\\r")
-                .replace("\t", "\\t");
-    }
-
-    /**
-     * 还原JSON转义的字符串
-     *
-     * @param text 转义后的文本
-     * @return 还原的文本
-     */
-    private static String unescapeJson(String text) {
-        if (text == null) {
-            return "";
-        }
-        return text.replace("\\n", "\n")
-                .replace("\\r", "\r")
-                .replace("\\t", "\t")
-                .replace("\\\"", "\"")
-                .replace("\\\\", "\\");
-    }
-
-
-    /**
-     * 流式发送对话请求并实时输出回复
-     *
-     * @param client HTTP客户端
-     * @param userMessage 用户消息
-     */
     private static void streamChat(HttpClient client, String userMessage) throws Exception {
-        String requestBody = buildRequestBody(userMessage);
+        MESSAGES.add(new Message("user", userMessage));
 
+        String requestBody = buildRequestBody(true);
         HttpRequest request = HttpRequest.newBuilder()
                 .uri(URI.create(API_URL))
                 .header("Content-Type", "application/json")
@@ -273,83 +114,190 @@ public class SimpleAIChat {
                 .POST(HttpRequest.BodyPublishers.ofString(requestBody, StandardCharsets.UTF_8))
                 .build();
 
-        // 使用InputStream读取流式响应
         HttpResponse<java.io.InputStream> response = client.send(request,
                 HttpResponse.BodyHandlers.ofInputStream());
 
         if (response.statusCode() != 200) {
-            // 非200状态码，读取错误信息
             String errorBody = new String(response.body().readAllBytes(), StandardCharsets.UTF_8);
-            System.out.println("API错误 (状态码: " + response.statusCode() + "): " + errorBody);
+            System.out.println("API错误 (状态码: " + response.statusCode() + "): " + parseError(errorBody));
             return;
         }
 
+        StringBuilder contentBuilder = new StringBuilder();
+        StringBuilder reasoningBuilder = new StringBuilder();
+        boolean inReasoning = false;
+        boolean startedContent = false;
+
         System.out.print("AI: ");
-        StringBuilder history = new StringBuilder();
-        // 逐行读取SSE流
         try (BufferedReader reader = new BufferedReader(
                 new InputStreamReader(response.body(), StandardCharsets.UTF_8))) {
 
             String line;
             while ((line = reader.readLine()) != null) {
-                // SSE格式：data: {...}
                 if (line.startsWith("data: ")) {
-                    String data = line.substring(6); // 去掉"data: "前缀
-
-                    // 检查是否结束标记
+                    String data = line.substring(6);
                     if ("[DONE]".equals(data)) {
                         break;
                     }
 
-                    // 提取content并实时输出
-                    String content = extractStreamContent(data);
-                    if (content != null && !content.isEmpty()) {
-                        System.out.print(content);
-                        history.append(content);
+                    DeltaResult delta = parseDelta(data);
+
+                    if (delta.reasoningContent != null && !delta.reasoningContent.isEmpty()) {
+                        if (!inReasoning) {
+                            System.out.println();
+                            System.out.print("[思考过程] ");
+                            inReasoning = true;
+                        }
+                        System.out.print(delta.reasoningContent);
+                        reasoningBuilder.append(delta.reasoningContent);
+                    }
+
+                    if (delta.content != null && !delta.content.isEmpty()) {
+                        if (inReasoning) {
+                            System.out.println();
+                            System.out.println("---");
+                            System.out.print("AI: ");
+                            inReasoning = false;
+                        }
+                        if (!startedContent) {
+                            startedContent = true;
+                        }
+                        System.out.print(delta.content);
+                        contentBuilder.append(delta.content);
                     }
                 }
             }
         }
-        DIALOGS.add(new Dialog(userMessage, history.toString()));
+        System.out.println();
+
+        String fullReasoning = reasoningBuilder.length() > 0 ? reasoningBuilder.toString() : null;
+        MESSAGES.add(new Message("assistant", contentBuilder.toString(), fullReasoning, null, null));
     }
 
-    /**
-     * 从流式响应的data中提取content
-     * SSE数据格式：{"choices":[{"delta":{"content":"文本内容"}}]}
-     */
-    private static String extractStreamContent(String data) {
-        try {
-            RESPONSES.add(data);
-            // 查找delta中的content字段
-            String contentTag = "\"content\":\"";
-            int contentStart = data.indexOf(contentTag);
-            if (contentStart == -1) {
-                return ""; // 有些chunk可能没有content（如角色定义）
+    // ============ 请求构建 ============
+
+    private static String buildRequestBody(boolean isStream) throws Exception {
+        ObjectNode root = MAPPER.createObjectNode();
+        root.put("model", MODEL_NAME);
+        root.put("temperature", 0.7);
+        root.put("max_tokens", 1000);
+        root.put("stream", isStream);
+
+        ArrayNode messagesArray = root.putArray("messages");
+
+        ObjectNode sysNode = messagesArray.addObject();
+        sysNode.put("role", "system");
+        sysNode.put("content", SYSTEM_PROMPT);
+
+        for (Message msg : MESSAGES) {
+            ObjectNode msgNode = messagesArray.addObject();
+            msgNode.put("role", msg.getRole());
+            msgNode.put("content", msg.getContent() != null ? msg.getContent() : "");
+
+            if (msg.getReasoningContent() != null) {
+                msgNode.put("reasoning_content", msg.getReasoningContent());
             }
-
-            contentStart += contentTag.length();
-            int contentEnd = contentStart;
-
-            // 处理转义字符，找到真正的结束引号
-            boolean escaped = false;
-            while (contentEnd < data.length()) {
-                char c = data.charAt(contentEnd);
-                if (escaped) {
-                    escaped = false;
-                } else if (c == '\\') {
-                    escaped = true;
-                } else if (c == '"') {
-                    break;
+            if (msg.getToolCalls() != null && !msg.getToolCalls().isEmpty()) {
+                ArrayNode tcArray = msgNode.putArray("tool_calls");
+                for (ToolCall tc : msg.getToolCalls()) {
+                    ObjectNode tcNode = tcArray.addObject();
+                    tcNode.put("id", tc.getId());
+                    tcNode.put("type", tc.getType());
+                    ObjectNode funcNode = tcNode.putObject("function");
+                    funcNode.put("name", tc.getFunction().getName());
+                    funcNode.put("arguments", tc.getFunction().getArguments());
                 }
-                contentEnd++;
             }
+            if (msg.getToolCallId() != null) {
+                msgNode.put("tool_call_id", msg.getToolCallId());
+            }
+        }
 
-            String content = data.substring(contentStart, contentEnd);
-            return unescapeJson(content);
+        return MAPPER.writeValueAsString(root);
+    }
 
-        } catch (Exception e) {
-            return "";
+    // ============ HTTP 请求 ============
+
+    private static Message sendChatRequest(HttpClient client) throws Exception {
+        String requestBody = buildRequestBody(STREAM);
+
+        HttpRequest request = HttpRequest.newBuilder()
+                .uri(URI.create(API_URL))
+                .header("Content-Type", "application/json")
+                .header("Authorization", "Bearer " + API_KEY)
+                .POST(HttpRequest.BodyPublishers.ofString(requestBody, StandardCharsets.UTF_8))
+                .build();
+
+        HttpResponse<String> response = client.send(request, HttpResponse.BodyHandlers.ofString());
+
+        if (response.statusCode() == 200) {
+            return parseAssistantMessage(response.body());
+        } else {
+            String errorMsg = parseError(response.body());
+            return new Message("assistant", "API错误 (状态码: " + response.statusCode() + "): " + errorMsg);
         }
     }
 
+    // ============ 响应解析 ============
+
+    private static Message parseAssistantMessage(String responseBody) throws Exception {
+        RESPONSES.add(responseBody);
+        JsonNode root = MAPPER.readTree(responseBody);
+        JsonNode message = root.get("choices").get(0).get("message");
+
+        String content = "";
+        if (message.has("content") && !message.get("content").isNull()) {
+            content = message.get("content").asText();
+        }
+
+        String reasoningContent = null;
+        if (message.has("reasoning_content") && !message.get("reasoning_content").isNull()) {
+            reasoningContent = message.get("reasoning_content").asText();
+        }
+
+        List<ToolCall> toolCalls = null;
+        if (message.has("tool_calls") && message.get("tool_calls").isArray()) {
+            toolCalls = MAPPER.readValue(
+                    message.get("tool_calls").traverse(),
+                    new TypeReference<List<ToolCall>>() {});
+        }
+
+        return new Message("assistant", content, reasoningContent, toolCalls, null);
+    }
+
+    private static DeltaResult parseDelta(String data) throws Exception {
+        RESPONSES.add(data);
+        JsonNode chunk = MAPPER.readTree(data);
+        JsonNode choice = chunk.get("choices").get(0);
+        JsonNode delta = choice.get("delta");
+
+        DeltaResult result = new DeltaResult();
+
+        if (delta.has("content") && !delta.get("content").isNull()) {
+            result.content = delta.get("content").asText();
+        }
+        if (delta.has("reasoning_content") && !delta.get("reasoning_content").isNull()) {
+            result.reasoningContent = delta.get("reasoning_content").asText();
+        }
+
+        return result;
+    }
+
+    private static String parseError(String responseBody) {
+        try {
+            JsonNode root = MAPPER.readTree(responseBody);
+            if (root.has("error") && root.get("error").has("message")) {
+                return root.get("error").get("message").asText();
+            }
+        } catch (Exception ignored) {
+        }
+        return responseBody;
+    }
+
+    // ============ 内部类 ============
+
+    private static class DeltaResult {
+        String content;
+        String reasoningContent;
+    }
 }
