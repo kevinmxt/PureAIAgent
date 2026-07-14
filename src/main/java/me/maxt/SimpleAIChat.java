@@ -7,6 +7,8 @@ import com.fasterxml.jackson.databind.node.ArrayNode;
 import com.fasterxml.jackson.databind.node.ObjectNode;
 import me.maxt.model.Message;
 import me.maxt.model.ToolCall;
+import me.maxt.tool.ShellTool;
+import me.maxt.tool.Tool;
 
 import java.io.BufferedReader;
 import java.io.InputStreamReader;
@@ -37,6 +39,7 @@ public class SimpleAIChat {
     private static final ObjectMapper MAPPER = new ObjectMapper();
     private static final List<Message> MESSAGES = new ArrayList<>();
     private static final List<String> RESPONSES = new ArrayList<>();
+    private static final List<Tool> TOOLS = List.of(new ShellTool());
 
     // ============ 主程序 ============
 
@@ -91,14 +94,28 @@ public class SimpleAIChat {
 
     private static void commonResponse(HttpClient httpClient, String userInput) throws Exception {
         MESSAGES.add(new Message("user", userInput));
-        Message assistantMsg = sendChatRequest(httpClient);
-        MESSAGES.add(assistantMsg);
 
-        if (assistantMsg.getReasoningContent() != null && !assistantMsg.getReasoningContent().isEmpty()) {
-            System.out.println("[思考过程] " + assistantMsg.getReasoningContent());
-            System.out.println("---");
+        while (true) {
+            Message assistantMsg = sendChatRequest(httpClient, false);
+            MESSAGES.add(assistantMsg);
+
+            if (assistantMsg.getToolCalls() != null && !assistantMsg.getToolCalls().isEmpty()) {
+                for (ToolCall tc : assistantMsg.getToolCalls()) {
+                    System.out.println("[工具调用] " + tc.getFunction().getName());
+                    String result = executeTool(tc);
+                    System.out.println("[工具结果] " + result);
+                    MESSAGES.add(new Message("tool", result, null, null, tc.getId()));
+                }
+                continue;
+            }
+
+            if (assistantMsg.getReasoningContent() != null && !assistantMsg.getReasoningContent().isEmpty()) {
+                System.out.println("[思考过程] " + assistantMsg.getReasoningContent());
+                System.out.println("---");
+            }
+            System.out.println("AI: " + (assistantMsg.getContent() != null ? assistantMsg.getContent() : ""));
+            break;
         }
-        System.out.println("AI: " + (assistantMsg.getContent() != null ? assistantMsg.getContent() : ""));
     }
 
     // ============ 流式对话 ============
@@ -213,13 +230,41 @@ public class SimpleAIChat {
             }
         }
 
+        if (!isStream && !TOOLS.isEmpty()) {
+            ArrayNode toolsArray = root.putArray("tools");
+            for (Tool tool : TOOLS) {
+                ObjectNode toolNode = toolsArray.addObject();
+                toolNode.put("type", "function");
+                ObjectNode funcNode = toolNode.putObject("function");
+                funcNode.put("name", tool.name());
+                funcNode.put("description", tool.description());
+                funcNode.set("parameters", tool.parameters());
+            }
+        }
+
         return MAPPER.writeValueAsString(root);
+    }
+
+    // ============ 工具执行 ============
+
+    private static String executeTool(ToolCall tc) {
+        try {
+            JsonNode args = MAPPER.readTree(tc.getFunction().getArguments());
+            for (Tool tool : TOOLS) {
+                if (tool.name().equals(tc.getFunction().getName())) {
+                    return tool.execute(args);
+                }
+            }
+            return "未找到工具: " + tc.getFunction().getName();
+        } catch (Exception e) {
+            return "工具执行出错: " + e.getMessage();
+        }
     }
 
     // ============ HTTP 请求 ============
 
-    private static Message sendChatRequest(HttpClient client) throws Exception {
-        String requestBody = buildRequestBody(STREAM);
+    private static Message sendChatRequest(HttpClient client, boolean isStream) throws Exception {
+        String requestBody = buildRequestBody(isStream);
 
         HttpRequest request = HttpRequest.newBuilder()
                 .uri(URI.create(API_URL))
