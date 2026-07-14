@@ -4,7 +4,6 @@ import me.maxt.model.Dialog;
 
 import java.io.BufferedReader;
 import java.io.InputStreamReader;
-import java.io.StringWriter;
 import java.net.URI;
 import java.net.http.HttpClient;
 import java.net.http.HttpRequest;
@@ -36,12 +35,14 @@ public class SimpleAIChat {
     // 系统提示词（定义AI的角色和行为）
     private static final String SYSTEM_PROMPT = "你是一个友好、有帮助的AI助手。请用简洁清晰的中文回答问题。";
 
-    private static final boolean STREAM = true;
+    private static final boolean STREAM = false;
 
     /**
      * 对话历史
      */
     private static final List<Dialog> DIALOGS = new ArrayList<>();
+
+    private static final List<String> RESPONSES = new ArrayList<>();
 
     // ============ 主程序 ============
 
@@ -49,6 +50,8 @@ public class SimpleAIChat {
         System.out.println("=================================");
         System.out.println("  简单AI对话程序 (JDK21原生实现)");
         System.out.println("  输入 '退出' 或 'exit' 结束对话");
+        System.out.println("  输入 '对话历史' 或 'history' 查看历史对话");
+        System.out.println("  输入 'debug' 查看调试信息");
         System.out.println("=================================\n");
 
         // 创建HTTP客户端（使用虚拟线程，提升性能）
@@ -70,6 +73,14 @@ public class SimpleAIChat {
                     if ("退出".equals(userInput) || "exit".equalsIgnoreCase(userInput)) {
                         System.out.println("再见！期待下次对话~");
                         break;
+                    }
+                    if ("对话历史".equals(userInput) || "history".equalsIgnoreCase(userInput)) {
+                        System.out.println(DIALOGS);
+                        continue;
+                    }
+                    if ("debug".equals(userInput)) {
+                        System.out.println(RESPONSES);
+                        continue;
                     }
 
                     if (STREAM) {
@@ -148,6 +159,7 @@ public class SimpleAIChat {
                     {"role": "system", "content": "%s"},
                     %s
                 ],
+                "user_id": "km",
                 "temperature": 0.7,
                 "max_tokens": 1000,
                 "stream": %b
@@ -174,6 +186,7 @@ public class SimpleAIChat {
      */
     private static String extractContent(String responseBody) {
         try {
+            RESPONSES.add(responseBody);
             // 查找content字段的位置
             String contentTag = "\"content\":\"";
             int contentStart = responseBody.indexOf(contentTag);
@@ -306,6 +319,7 @@ public class SimpleAIChat {
      */
     private static String extractStreamContent(String data) {
         try {
+            RESPONSES.add(data);
             // 查找delta中的content字段
             String contentTag = "\"content\":\"";
             int contentStart = data.indexOf(contentTag);

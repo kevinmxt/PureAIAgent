@@ -16,4 +16,12 @@ public class Dialog {
     public String getAi() {
         return ai;
     }
+
+    @Override
+    public String toString() {
+        return "Dialog{" +
+                "user='" + user + '\'' +
+                ", ai='" + ai + '\'' +
+                '}';
+    }
 }
