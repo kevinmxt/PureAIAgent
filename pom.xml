@@ -69,6 +69,8 @@
             <configuration>
               <target>
                 <copy file="${project.basedir}/run.bat" todir="${project.build.directory}" />
+                <copy file="${project.basedir}/src/main/resources/config.properties"
+                      todir="${project.build.directory}" />
               </target>
             </configuration>
           </execution>

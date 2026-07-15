@@ -5,3 +5,4 @@
 - **JLine**: `jline` 3.26.1 — Windows 控制台 UTF-8 输入，解决 `chcp 65001` 下 Java `System.in`/`Console` 无法正确读取中文的问题
 - **HTTP**: `java.net.http.HttpClient`（JDK 11+ 内置）
 - **JSON**: `Jackson ObjectMapper` 手动构建请求体和解析响应
+- **配置**: `java.util.Properties`（JDK 内置）读取外部配置文件

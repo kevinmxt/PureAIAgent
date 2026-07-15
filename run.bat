@@ -3,11 +3,12 @@ chcp 65001 >nul
 setlocal
 
 if "%OPENAI_API_KEY%"=="" (
-    echo [错误] 未设置 OPENAI_API_KEY 环境变量
-    echo 请先执行: set OPENAI_API_KEY=你的API密钥
-    echo 或在系统环境变量中配置后重新打开命令行
-    pause
-    exit /b 1
+    if not exist "%~dp0config.properties" (
+        if not exist "%~dp0target\config.properties" (
+            echo [警告] 未设置 OPENAI_API_KEY 环境变量，也找不到 config.properties
+            echo 请设置环境变量或在 config.properties 中配置 api.key
+        )
+    )
 )
 
 rem 先检查同目录下的 jar（适配 target 目录），再检查上级 target 目录

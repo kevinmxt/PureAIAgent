@@ -15,10 +15,20 @@
 
 ### 打包运行
 
-`mvn package -DskipTests` 会在 `target/` 下生成 `llm-chat.jar`（含所有依赖的 fat jar）。
+`mvn package -DskipTests` 会在 `target/` 下生成：
+
+| 文件 | 说明 |
+|------|------|
+| `llm-chat.jar` | 可执行 fat JAR（含所有依赖） |
+| `config.properties` | 配置文件（UTF-8，可直接编辑） |
+| `run.bat` | 启动脚本 |
 
 运行方式：
-- **双击 `run.bat`** — 自动检测 `OPENAI_API_KEY`，JAR 不存在时自动构建
+- **双击 `run.bat`** — 自动检测环境变量和配置文件，JAR 不存在时自动构建
 - **命令行**: `java -jar target/llm-chat.jar`
 
-运行前必须设置环境变量 `OPENAI_API_KEY`。
+运行前必须配置 API 密钥（二选一）：
+- 在 `config.properties` 中取消注释 `api.key` 并填入密钥
+- 设置环境变量 `OPENAI_API_KEY`
+
+> 修改 `config.properties` 后无需重新打包，重启程序即可生效。

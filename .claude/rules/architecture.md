@@ -5,6 +5,8 @@
 ```
 src/main/java/me/maxt/
 ├── SimpleAIChat.java              ← 主入口,对话流程编排
+├── config/
+│   └── AppConfig.java             ← 配置加载（Properties 文件,三级回退）
 ├── api/
 │   ├── ChatApiClient.java         ← API通信接口 (语义化对话方法)
 │   ├── DeepSeekApiClient.java     ← DeepSeek实现 (封装所有模型格式)
@@ -41,8 +43,8 @@ src/test/java/me/maxt/
 │ 不包含: 请求体构建、JSON解析、SSE解析                        │
 ├────────────────────────────────────────────────────────────┤
 │ main()                                                      │
-│   └─ TerminalBuilder(UTF-8) → LineReader                    │
-│      └─ new DeepSeekApiClient(url,key,model,prompt)          │
+│   └─ AppConfig.load() → TerminalBuilder(UTF-8) → LineReader│
+│      └─ new DeepSeekApiClient(config)                       │
 │         → new SimpleAIChat(client) → 主循环                  │
 ├────────────────────────────────────────────────────────────┤
 │ ◆ commonResponse(userInput)                                 │
@@ -76,7 +78,7 @@ src/test/java/me/maxt/
     │ DeepSeekApiClient     │  ← 封装所有 DeepSeek/OpenAI 格式
     │ (api/)                │
     ├───────────────────────┤
-    │ - apiUrl, apiKey      │  构造: (url, key, model, prompt)
+    │ - apiUrl, apiKey      │  构造: 4参数(旧) / 6参数 / AppConfig
     │ - modelName           │
     │ - systemPrompt        │
     │ - httpClient          │
@@ -169,5 +171,5 @@ SimpleAIChat.main()
 实现 `Tool` 接口 (`tool/Tool.java`)，然后传入 `SimpleAIChat` 的构造器或设置 tools 列表。参考 `ShellTool.java`。
 
 ### 切换模型/API
-- **同协议模型（OpenAI 兼容）**: 修改 `SimpleAIChat.main()` 中 `DeepSeekApiClient` 的 url/model 参数
+- **同协议模型（OpenAI 兼容）**: 修改 `config.properties` 中的 `api.url` 和 `model.name`，无需重新打包
 - **不同协议模型**: 实现 `ChatApiClient` 接口，封装该模型的请求/响应格式，传入 `SimpleAIChat` 构造器

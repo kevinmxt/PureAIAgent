@@ -5,6 +5,7 @@ import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.ArrayNode;
 import com.fasterxml.jackson.databind.node.ObjectNode;
+import me.maxt.config.AppConfig;
 import me.maxt.model.Message;
 import me.maxt.model.ToolCall;
 import me.maxt.tool.Tool;
@@ -31,17 +32,31 @@ public class DeepSeekApiClient implements ChatApiClient {
     private final String apiKey;
     private final String modelName;
     private final String systemPrompt;
+    private final double temperature;
+    private final int maxTokens;
     private final HttpClient httpClient;
     private final List<String> rawResponses = new ArrayList<>();
 
     public DeepSeekApiClient(String apiUrl, String apiKey, String modelName, String systemPrompt) {
+        this(apiUrl, apiKey, modelName, systemPrompt, 0.7, 1000);
+    }
+
+    public DeepSeekApiClient(String apiUrl, String apiKey, String modelName, String systemPrompt,
+                             double temperature, int maxTokens) {
         this.apiUrl = apiUrl;
         this.apiKey = apiKey;
         this.modelName = modelName;
         this.systemPrompt = systemPrompt;
+        this.temperature = temperature;
+        this.maxTokens = maxTokens;
         this.httpClient = HttpClient.newBuilder()
                 .version(HttpClient.Version.HTTP_1_1)
                 .build();
+    }
+
+    public DeepSeekApiClient(AppConfig config) {
+        this(config.getApiUrl(), config.getApiKey(), config.getModelName(),
+                config.getSystemPrompt(), config.getTemperature(), config.getMaxTokens());
     }
 
     // ============ ChatApiClient 实现 ============
@@ -130,8 +145,8 @@ public class DeepSeekApiClient implements ChatApiClient {
     private String buildRequestBody(List<Message> history, List<Tool> tools, boolean stream) throws Exception {
         ObjectNode root = MAPPER.createObjectNode();
         root.put("model", modelName);
-        root.put("temperature", 0.7);
-        root.put("max_tokens", 1000);
+        root.put("temperature", temperature);
+        root.put("max_tokens", maxTokens);
         root.put("stream", stream);
 
         ArrayNode messagesArray = root.putArray("messages");

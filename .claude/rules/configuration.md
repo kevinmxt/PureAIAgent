@@ -1,25 +1,42 @@
-# 配置常量
+# 配置管理
 
-所有配置集中在 `SimpleAIChat.java:30-35`。
+所有配置由 `me.maxt.config.AppConfig` 统一管理。
 
-| 常量 | 值 | 说明 |
-|------|-----|------|
-| `API_URL` | `https://api.deepseek.com/chat/completions` | 接口地址 |
-| `API_KEY` | `System.getenv("OPENAI_API_KEY")` | 从环境变量读取 |
-| `MODEL_NAME` | `deepseek-v4-flash` | 模型名称 |
-| `SYSTEM_PROMPT` | 友好中文助手提示词 | 系统提示词 |
-| `STREAM` | `false` | 是否流式输出，`true`=流式，`false`=非流式 |
-| `MAPPER` | `ObjectMapper` | Jackson 全局单例，供 `executeTool()` 解析工具参数 |
+## 配置文件
 
-关键实例字段（`SimpleAIChat.java:37-39`）：
+`config.properties` — UTF-8 编码的 Java Properties 文件，位于 JAR 同目录。
 
-| 字段 | 类型 | 用途 |
-|------|------|------|
-| `apiClient` | `ChatApiClient` | API 通信接口，构造时注入 |
-| `messages` | `List<Message>` | 完整对话历史，每次请求全部发送 |
-| `tools` | `List<Tool>` | 注册的工具列表，默认含 `ShellTool` |
+## 加载优先级
 
-## 编码
+1. **外部文件**: JAR 所在目录下的 `config.properties`
+2. **类路径**: JAR 内置的 `/config.properties`（自动包含）
+3. **内置默认值**: `AppConfig` 中以 `private static final` 常量维护
 
-- `run.bat` 通过 `chcp 65001` 设置控制台为 UTF-8，`-Dfile.encoding=UTF-8` 设置 JVM 编码
-- `main()` 使用 JLine `LineReader`（UTF-8 编码）读取输入，解决 Windows 下 Java `System.in`/`Console` 无法正确处理 UTF-8 控制台输入的问题
+## 可配置项
+
+| 属性键 | 类型 | 默认值 | 说明 |
+|--------|------|--------|------|
+| `api.url` | String | `https://api.deepseek.com/chat/completions` | API 接口地址 |
+| `api.key` | String | 见下方 | API 密钥（三重回退） |
+| `model.name` | String | `deepseek-v4-flash` | 模型名称 |
+| `model.temperature` | double | `0.7` | 温度参数 0.0~2.0 |
+| `model.max_tokens` | int | `1000` | 最大输出 token 数 |
+| `system.prompt` | String | 友好中文助手提示词 | 系统提示词 |
+| `stream` | boolean | `false` | 是否流式输出 |
+
+## API 密钥回退规则
+
+```
+config.properties 的 api.key  >  OPENAI_API_KEY 环境变量  >  空字符串
+```
+
+三者均未设置时 API 调用将返回 401 错误。
+
+## 运行时修改
+
+用户可直接编辑 JAR 同目录下的 `config.properties`，修改后**无需重新打包**，重启程序即可生效。
+
+## 测试
+
+- 测试代码中可绕过 `AppConfig.load()`，直接使用 `DeepSeekApiClient` 的旧 4 参数构造器
+- 集成测试未使用 `AppConfig`，保持自包含

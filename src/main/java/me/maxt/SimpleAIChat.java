@@ -7,6 +7,7 @@ import me.maxt.api.ChatApiClient;
 import me.maxt.api.DeepSeekApiClient;
 import me.maxt.api.DeltaEvent;
 import me.maxt.api.DeltaHandler;
+import me.maxt.config.AppConfig;
 import me.maxt.model.Message;
 import me.maxt.model.ToolCall;
 import me.maxt.tool.ShellTool;
@@ -27,11 +28,6 @@ import org.jline.terminal.TerminalBuilder;
  */
 public class SimpleAIChat {
 
-    private static final String API_URL = "https://api.deepseek.com/chat/completions";
-    private static final String API_KEY = System.getenv("OPENAI_API_KEY");
-    private static final String MODEL_NAME = "deepseek-v4-flash";
-    private static final String SYSTEM_PROMPT = "你是一个友好、有帮助的AI助手。请用简洁清晰的中文回答问题。";
-    private static final boolean STREAM = false;
     private static final ObjectMapper MAPPER = new ObjectMapper();
 
     private final ChatApiClient apiClient;
@@ -65,7 +61,8 @@ public class SimpleAIChat {
         System.out.println("  输入 'debug' 查看调试信息");
         System.out.println("=================================\n");
 
-        ChatApiClient client = new DeepSeekApiClient(API_URL, API_KEY, MODEL_NAME, SYSTEM_PROMPT);
+        AppConfig config = AppConfig.load();
+        ChatApiClient client = new DeepSeekApiClient(config);
         SimpleAIChat chat = new SimpleAIChat(client);
 
         try {
@@ -104,7 +101,7 @@ public class SimpleAIChat {
                     continue;
                 }
 
-                if (STREAM) {
+                if (config.isStream()) {
                     chat.streamChat(userInput);
                 } else {
                     chat.commonResponse(userInput);
