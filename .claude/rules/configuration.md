@@ -23,11 +23,25 @@
 | `model.max_tokens` | int | `1000` | 最大输出 token 数 |
 | `system.prompt` | String | 友好中文助手提示词 | 系统提示词 |
 | `stream` | boolean | `false` | 是否流式输出 |
+| `excel.work.dir` | String | `./excel_files` | Excel 文件默认工作目录 |
+| `excel.sub_model.url` | String | 空（复用主模型） | 子模型 API 地址 |
+| `excel.sub_model.key` | String | 空（复用主模型） | 子模型 API 密钥 |
+| `excel.sub_model.name` | String | `deepseek-chat` | 子模型名称 |
+| `excel.sub_model.prompt` | String | 内置默认值 | 子模型系统提示词（NL→JSON 翻译） |
+| `excel.sub_model.temperature` | double | `0.0` | 子模型温度（确定性输出） |
+| `excel.max_rows` | int | `100` | 读取数据最大返回行数 |
+| `excel.restrict_path` | boolean | `true` | 是否限制文件操作仅在工作目录 |
 
 ## API 密钥回退规则
 
+主模型:
 ```
 config.properties 的 api.key  >  OPENAI_API_KEY 环境变量  >  空字符串
+```
+
+子模型 (Excel):
+```
+excel.sub_model.key  >  config.properties 的 api.key  >  OPENAI_API_KEY 环境变量  >  空字符串
 ```
 
 三者均未设置时 API 调用将返回 401 错误。

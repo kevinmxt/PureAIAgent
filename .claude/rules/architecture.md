@@ -18,13 +18,18 @@ src/main/java/me/maxt/
 │   └── ToolCall.java              ← 工具调用模型
 └── tool/
     ├── Tool.java                  ← 工具接口 (扩展点)
-    └── ShellTool.java             ← 唯一的工具实现
+    ├── ShellTool.java             ← Shell 命令执行工具
+    └── excel/
+        ├── ExcelTool.java         ← Excel 工具总协调器
+        └── ExcelOperationExecutor.java ← POI 操作引擎
 
 src/test/java/me/maxt/
 ├── SimpleAIChatMockTest.java      ← Mock单元测试 (6用例)
 ├── SimpleAIChatIntegrationTest.java ← 集成测试 (3用例)
-└── api/
-    └── DeepSeekApiClientTest.java ← 解析逻辑测试 (6用例)
+├── api/
+│   └── DeepSeekApiClientTest.java ← 解析逻辑测试 (6用例)
+└── tool/excel/
+    └── ExcelOperationExecutorTest.java ← Excel 操作引擎测试 (18用例)
 ```
 
 ## 代码地图
@@ -102,11 +107,24 @@ src/test/java/me/maxt/
 │ parameters(): JsonNode   │    └── onDelta(DeltaEvent)
 │ execute(JsonNode):String │
 └──────────┬───────────────┘
-    ┌──────┴────────┐
-    │ ShellTool     │
-    │ name→run_shell│
-    │ _command      │
-    └───────────────┘
+    ┌──────┴──────────────────┐
+    │                         │
+┌───┴───────────┐  ┌──────────┴──────────────────────┐
+│ ShellTool     │  │ ExcelTool (tool/excel/)         │
+│ name→run_shell│  │ name→excel_tool                 │
+│ _command      │  ├────────────────────────────────┤
+└───────────────┘  │ ◆ execute()                     │
+                   │   1. 解析参数+文件安全检查        │
+                   │   2. 子模型LLM翻译NL→JSON操作序列 │
+                   │   3. ExcelOperationExecutor执行   │
+                   │   4. 返回结构化摘要               │
+                   ├────────────────────────────────┤
+                   │ ExcelOperationExecutor          │
+                   │ ├─ read → Markdown表格+merge信息 │
+                   │ ├─ write → Markdown→Excel       │
+                   │ ├─ formula → 写入公式+即时求值    │
+                   │ └─ chart → 柱状图/折线图/饼图    │
+                   └────────────────────────────────┘
 ```
 
 ## 数据流
@@ -163,12 +181,19 @@ SimpleAIChat.main()
 |------|------|----------|------|
 | Mock 单元测试 | `SimpleAIChatMockTest.java` | `mvn test` | Mock ChatApiClient, 测试对话流程 |
 | 解析测试 | `DeepSeekApiClientTest.java` | `mvn test` | 测试响应解析准确性 |
+| Excel 引擎测试 | `ExcelOperationExecutorTest.java` | `mvn test` | 测试 POI 操作：坐标解析、Markdown解析、read/write/formula/chart |
 | 集成测试 | `SimpleAIChatIntegrationTest.java` | `mvn test -Pintegration` | 真实 API, 需 `OPENAI_API_KEY` |
 
 ## 扩展指南
 
 ### 添加新工具
-实现 `Tool` 接口 (`tool/Tool.java`)，然后传入 `SimpleAIChat` 的构造器或设置 tools 列表。参考 `ShellTool.java`。
+实现 `Tool` 接口 (`tool/Tool.java`)，然后传入 `SimpleAIChat` 的构造器或设置 tools 列表。参考 `ShellTool.java`（简单工具）和 `ExcelTool.java`（使用子模型 LLM 翻译自然语言指令的复杂工具）。
+
+### ExcelTool 架构要点
+- **子模型 LLM**: ExcelTool 内部创建独立的 `DeepSeekApiClient` 实例，通过 `config.properties` 中 `excel.sub_model.*` 系列配置项控制（默认复用主模型 URL 和 Key）
+- **NL→JSON 翻译**: 子模型将自然语言指令翻译为 JSON 操作序列（四种类型: read/write/formula/chart），ExcelOperationExecutor 逐条执行
+- **文件安全**: 默认仅允许操作 `excel.work.dir` 目录下的文件，可在配置中关闭限制
+- **关键约束**: 同一个文件只能被 `new XSSFWorkbook()` 打开一次，`buildFileContext` 不再单独打开文件
 
 ### 切换模型/API
 - **同协议模型（OpenAI 兼容）**: 修改 `config.properties` 中的 `api.url` 和 `model.name`，无需重新打包

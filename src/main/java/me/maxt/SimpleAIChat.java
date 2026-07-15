@@ -12,6 +12,7 @@ import me.maxt.model.Message;
 import me.maxt.model.ToolCall;
 import me.maxt.tool.ShellTool;
 import me.maxt.tool.Tool;
+import me.maxt.tool.excel.ExcelTool;
 
 import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
@@ -39,6 +40,11 @@ public class SimpleAIChat {
         this.tools = new ArrayList<>(List.of(new ShellTool()));
     }
 
+    public SimpleAIChat(ChatApiClient apiClient, AppConfig config) {
+        this.apiClient = apiClient;
+        this.tools = new ArrayList<>(List.of(new ShellTool(), new ExcelTool(config)));
+    }
+
     SimpleAIChat(ChatApiClient apiClient, List<Tool> tools) {
         this.apiClient = apiClient;
         this.tools = new ArrayList<>(tools);
@@ -63,7 +69,7 @@ public class SimpleAIChat {
 
         AppConfig config = AppConfig.load();
         ChatApiClient client = new DeepSeekApiClient(config);
-        SimpleAIChat chat = new SimpleAIChat(client);
+        SimpleAIChat chat = new SimpleAIChat(client, config);
 
         try {
             Terminal terminal = TerminalBuilder.builder()
