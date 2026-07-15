@@ -4,11 +4,13 @@
 
 ```
 src/main/java/me/maxt/
-├── SimpleAIChat.java              ← 主入口
+├── SimpleAIChat.java              ← 主入口,对话流程编排
 ├── api/
-│   ├── ChatApiClient.java         ← API通信接口 (测试seam)
-│   ├── DeepSeekApiClient.java     ← DeepSeek HTTP实现
-│   └── ApiException.java          ← API异常
+│   ├── ChatApiClient.java         ← API通信接口 (语义化对话方法)
+│   ├── DeepSeekApiClient.java     ← DeepSeek实现 (封装所有模型格式)
+│   ├── ApiException.java          ← API异常
+│   ├── DeltaEvent.java            ← 流式增量事件 record
+│   └── DeltaHandler.java          ← 流式回调函数式接口
 ├── model/
 │   ├── Message.java               ← 消息模型
 │   └── ToolCall.java              ← 工具调用模型
@@ -17,93 +19,91 @@ src/main/java/me/maxt/
     └── ShellTool.java             ← 唯一的工具实现
 
 src/test/java/me/maxt/
-├── SimpleAIChatMockTest.java      ← Mock单元测试 (14用例)
-└── SimpleAIChatIntegrationTest.java ← 集成测试 (3用例,@Tag("integration"))
+├── SimpleAIChatMockTest.java      ← Mock单元测试 (6用例)
+├── SimpleAIChatIntegrationTest.java ← 集成测试 (3用例)
+└── api/
+    └── DeepSeekApiClientTest.java ← 解析逻辑测试 (6用例)
 ```
 
 ## 代码地图
 
 ```
-┌─────────────────────────────────────────────────────────────┐
-│                      SimpleAIChat                           │
-│         构造器: SimpleAIChat(ChatApiClient)                  │
-├─────────────────────────────────────────────────────────────┤
-│ 配置常量 (static)                                            │
-│   API_URL, API_KEY, MODEL_NAME, SYSTEM_PROMPT, STREAM       │
-├─────────────────────────────────────────────────────────────┤
-│ 实例状态                                                     │
-│   messages: List<Message>     ← 完整对话历史                 │
-│   responses: List<String>     ← 原始响应,debug用             │
-│   tools: List<Tool>           ← 已注册工具列表                │
-│   apiClient: ChatApiClient    ← 注入的API客户端              │
-├─────────────────────────────────────────────────────────────┤
-│ main()                                                       │
-│   └─ DeepSeekApiClient → SimpleAIChat → 主循环              │
-├─────────────────────────────────────────────────────────────┤
-│ ◆ commonResponse(userInput)                                  │
-│   非流式对话 + 工具调用循环                                    │
-│   ┌─────────────────────────────────────────────┐           │
-│   │ 1. user msg → sendChatRequest()             │           │
-│   │ 2. assistant msg → 检查 toolCalls            │           │
-│   │ 3. 有工具调用 → executeTool() → tool msg     │           │
-│   │    → 回到步骤1 (循环)                         │           │
-│   │ 4. 无工具调用 → 输出思考 + 回答 → 结束       │           │
-│   └─────────────────────────────────────────────┘           │
-├─────────────────────────────────────────────────────────────┤
-│ ◆ streamChat(userMessage)                                    │
-│   流式对话 (手动SSE解析,无工具调用处理)                        │
-│   ┌─────────────────────────────────────────────┐           │
-│   │ 1. apiClient.sendStream(request) → InputStream│         │
-│   │ 2. 逐行读 SSE: "data: {json}"               │           │
-│   │ 3. parseDelta() 提取 delta.content /        │           │
-│   │    delta.reasoning_content                  │           │
-│   │ 4. 分阶段实时输出                             │           │
-│   └─────────────────────────────────────────────┘           │
-├─────────────────────────────────────────────────────────────┤
-│ ◆ sendChatRequest(isStream) → apiClient.sendNonStream()      │
-│   调用接口, 捕获 ApiException → 转换为 error Message         │
-├─────────────────────────────────────────────────────────────┤
-│ ◆ buildRequestBody(isStream)                                 │
-│   构建完整请求体,含system提示词+全部messages+tools定义        │
-├─────────────────────────────────────────────────────────────┤
-│ ◆ parseAssistantMessage(responseBody) → Message              │
-│   解析 choices[0].message (content/reasoning/tool_calls)     │
-├─────────────────────────────────────────────────────────────┤
-│ ◆ parseDelta(SSE data) → DeltaResult {content, reasoning}    │
-│ ◆ parseError(responseBody) → 提取 error.message              │
-│ ◆ executeTool(ToolCall) → 匹配 tools, 执行并返回文本          │
-│       │                                                      │
-│       ▼                                                      │
-│  ┌──────────────────┐  ┌──────────────────┐                 │
-│  │ <<interface>>     │  │ Message          │                 │
-│  │ ChatApiClient     │  │ ──────────────── │                 │
-│  │ (api/)            │  │ + role           │                 │
-│  ├──────────────────┤  │ + content         │                 │
-│  │ sendNonStream()   │  │ + reasoningContent│                 │
-│  │ sendStream()      │  │ + toolCalls       │                 │
-│  └────────┬─────────┘  │ + toolCallId      │                 │
-│           │             └────────┬─────────┘                 │
-│  ┌────────┴─────────┐           │                            │
-│  │ DeepSeekApiClient │  ┌────────┴─────────┐                 │
-│  │ (api/)            │  │ ToolCall         │                 │
-│  ├──────────────────┤  │ ────────────────  │                 │
-│  │ - apiUrl, apiKey  │  │ + id              │                 │
-│  │ - httpClient      │  │ + type            │                 │
-│  │ buildRequest()    │  │ + function        │                 │
-│  └──────────────────┘  │   └ FunctionCall  │                 │
-│                         │     + name        │                 │
-│  ┌──────────────────┐  │     + arguments   │                 │
-│  │ <<interface>>     │  └──────────────────┘                 │
-│  │ Tool              │                                       │
-│  │ (tool/)           │  ┌──────────────────┐                 │
-│  ├──────────────────┤  │ ShellTool        │                 │
-│  │ name():String     │  │ (tool/)          │                 │
-│  │ description()     │  ├──────────────────┤                 │
-│  │ parameters()      │  │ name→run_shell   │                 │
-│  │ execute(args)     │  │ _command         │                 │
-│  └──────────────────┘  │ execute→cmd /c    │                 │
-│                         └──────────────────┘                 │
-└─────────────────────────────────────────────────────────────┘
+┌────────────────────────────────────────────────────────────┐
+│                    SimpleAIChat                            │
+│             构造器: (ChatApiClient [, List<Tool>])          │
+├────────────────────────────────────────────────────────────┤
+│ 职责: 对话流程编排                                          │
+│   - 用户输入循环 (main)                                     │
+│   - 工具调用循环 (commonResponse)                           │
+│   - 流式输出格式化 (streamChat)                             │
+│   - 工具执行分发 (executeTool)                              │
+│                                                            │
+│ 不包含: 请求体构建、JSON解析、SSE解析                        │
+├────────────────────────────────────────────────────────────┤
+│ main()                                                      │
+│   └─ new DeepSeekApiClient(url,key,model,prompt)            │
+│      → new SimpleAIChat(client) → 主循环                    │
+├────────────────────────────────────────────────────────────┤
+│ ◆ commonResponse(userInput)                                 │
+│   ┌──────────────────────────────────────────────┐         │
+│   │ 1. user msg → apiClient.chat(msgs, tools)    │         │
+│   │ 2. 返回 Message → 检查 toolCalls              │         │
+│   │ 3. 有工具调用 → executeTool() → tool msg      │         │
+│   │    → 回到步骤1 (循环)                          │         │
+│   │ 4. 无工具调用 → 输出思考+回答 → 结束          │         │
+│   └──────────────────────────────────────────────┘         │
+├────────────────────────────────────────────────────────────┤
+│ ◆ streamChat(userMessage)                                   │
+│   ┌──────────────────────────────────────────────┐         │
+│   │ 1. user msg → apiClient.chatStream(msgs, h)  │         │
+│   │ 2. DeltaHandler 实时输出 content/reasoning   │         │
+│   │ 3. 返回完整 Message → 记录到 messages         │         │
+│   └──────────────────────────────────────────────┘         │
+├────────────────────────────────────────────────────────────┤
+│ ◆ executeTool(ToolCall) → 工具分发                          │
+└────────────────────────────────────────────────────────────┘
+
+┌────────────────────────────────────────────────────────────┐
+│ <<interface>> ChatApiClient (api/)                         │
+├────────────────────────────────────────────────────────────┤
+│ + chat(List<Message>, List<Tool>) → Message                │
+│ + chatStream(List<Message>, DeltaHandler) → Message        │
+│ + getRawResponses() → List<String>                         │
+└────────────┬───────────────────────────────────────────────┘
+             │
+    ┌────────┴──────────────┐
+    │ DeepSeekApiClient     │  ← 封装所有 DeepSeek/OpenAI 格式
+    │ (api/)                │
+    ├───────────────────────┤
+    │ - apiUrl, apiKey      │  构造: (url, key, model, prompt)
+    │ - modelName           │
+    │ - systemPrompt        │
+    │ - httpClient          │
+    ├───────────────────────┤
+    │ chat()                │  → buildRequestBody → HTTP → parse
+    │ chatStream()          │  → buildRequestBody → HTTP → SSE逐行解析
+    │ getRawResponses()     │
+    ├───────────────────────┤
+    │ buildRequestBody()    │  (private)
+    │ parseAssistantMessage()│  (package-private, 供测试)
+    │ parseDelta()          │  (package-private, 供测试)
+    │ parseError()          │  (public static)
+    └───────────────────────┘
+
+┌──────────────────────────┐
+│ <<interface>> Tool       │    DeltaEvent (record)
+│ (tool/)                  │    ├── content: String
+├──────────────────────────┤    └── reasoningContent: String
+│ name(): String           │
+│ description(): String    │    DeltaHandler (@FunctionalInterface)
+│ parameters(): JsonNode   │    └── onDelta(DeltaEvent)
+│ execute(JsonNode):String │
+└──────────┬───────────────┘
+    ┌──────┴────────┐
+    │ ShellTool     │
+    │ name→run_shell│
+    │ _command      │
+    └───────────────┘
 ```
 
 ## 数据流
@@ -112,16 +112,19 @@ src/test/java/me/maxt/
 用户输入
   │
   ▼
-SimpleAIChat.main()  ← 主循环,按 STREAM 分流
+SimpleAIChat.main()
   │
-  ├─[非流式]──▶ commonResponse()  ← 支持 Function Calling 循环
+  ├─[非流式]──▶ commonResponse()
   │               │
   │               ▼
-  │            sendChatRequest()  → ChatApiClient.sendNonStream()
-  │               │                    │
-  │               ▼                    ▼
-  │            parseAssistantMessage() ←─ DeepSeekApiClient
-  │               │                    (HTTP → DeepSeek API)
+  │            apiClient.chat(history, tools)
+  │               │
+  │               ▼
+  │            DeepSeekApiClient
+  │            ├─ buildRequestBody (含 system prompt + messages + tools)
+  │            ├─ HTTP POST → DeepSeek API
+  │            └─ parseAssistantMessage → Message
+  │               │
   │               ▼
   │            Message (assistant)
   │               │
@@ -133,39 +136,37 @@ SimpleAIChat.main()  ← 主循环,按 STREAM 分流
   │        ▼
   │    Message (tool) → 回到 commonResponse 循环
   │
-  └─[流式]──▶ streamChat()  ← 无工具调用,手动SSE逐行解析
+  └─[流式]──▶ streamChat()
                  │
                  ▼
-              apiClient.sendStream() → InputStream
+              apiClient.chatStream(history, handler)
                  │
                  ▼
-              parseDelta() × N → 实时输出
+              DeepSeekApiClient
+              ├─ buildRequestBody (stream=true)
+              ├─ HTTP POST(stream) → SSE InputStream
+              └─ parseDelta × N → handler.onDelta(event)
+                 │
+                 ▼
+              DeltaHandler 实时打印
+                 │
+                 ▼
+              返回完整 Message
 ```
 
 ## 测试体系
 
 | 类型 | 文件 | 运行命令 | 说明 |
 |------|------|----------|------|
-| Mock 单元测试 | `SimpleAIChatMockTest.java` | `mvn test` | 通过 Mock `ChatApiClient` 测试,不联网 |
-| 集成测试 | `SimpleAIChatIntegrationTest.java` | `mvn test -Pintegration` | 真实 API,需 `OPENAI_API_KEY` |
-
-测试类**只依赖 `ChatApiClient` 接口**，不依赖具体实现。后续重构代码时，只要接口不变，测试代码无需修改。
+| Mock 单元测试 | `SimpleAIChatMockTest.java` | `mvn test` | Mock ChatApiClient, 测试对话流程 |
+| 解析测试 | `DeepSeekApiClientTest.java` | `mvn test` | 测试响应解析准确性 |
+| 集成测试 | `SimpleAIChatIntegrationTest.java` | `mvn test -Pintegration` | 真实 API, 需 `OPENAI_API_KEY` |
 
 ## 扩展指南
 
 ### 添加新工具
-实现 `Tool` 接口 (`tool/Tool.java`) 的 4 个方法，然后在 `SimpleAIChat` 的 tools 列表中注册即可。参考 `ShellTool.java`。
-
-```
-Tool 接口方法:
-  name()        → 工具名称 (模型按名称选择)
-  description() → 用途描述 (模型按描述判断何时调用)
-  parameters()  → 参数 JSON Schema
-  execute(JsonNode arguments) → 执行逻辑,返回文本
-```
+实现 `Tool` 接口 (`tool/Tool.java`)，然后传入 `SimpleAIChat` 的构造器或设置 tools 列表。参考 `ShellTool.java`。
 
 ### 切换模型/API
-修改 `SimpleAIChat` 顶部的 `MODEL_NAME` 和 `API_URL` 常量。
-
-### 替换 API 客户端
-实现 `ChatApiClient` 接口 (`api/ChatApiClient.java`)，然后传入 `SimpleAIChat` 构造器即可。
+- **同协议模型（OpenAI 兼容）**: 修改 `SimpleAIChat.main()` 中 `DeepSeekApiClient` 的 url/model 参数
+- **不同协议模型**: 实现 `ChatApiClient` 接口，封装该模型的请求/响应格式，传入 `SimpleAIChat` 构造器

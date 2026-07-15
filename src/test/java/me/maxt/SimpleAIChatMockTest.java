@@ -1,6 +1,5 @@
 package me.maxt;
 
-import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.ObjectNode;
 import me.maxt.api.ApiException;
@@ -19,7 +18,7 @@ import org.mockito.junit.jupiter.MockitoExtension;
 import java.util.List;
 
 import static org.junit.jupiter.api.Assertions.*;
-import static org.mockito.ArgumentMatchers.anyString;
+import static org.mockito.ArgumentMatchers.anyList;
 import static org.mockito.Mockito.when;
 
 @ExtendWith(MockitoExtension.class)
@@ -45,12 +44,12 @@ class SimpleAIChatMockTest {
     @Test
     @DisplayName("基本对话: 输入 'hi', 返回正常回复")
     void basicChat() throws Exception {
-        when(apiClient.sendNonStream(anyString())).thenReturn("""
-                {"choices":[{"message":{"role":"assistant","content":"你好！有什么可以帮助你的？"}}]}""");
+        when(apiClient.chat(anyList(), anyList()))
+                .thenReturn(new Message("assistant", "你好！有什么可以帮助你的？"));
 
         chat.commonResponse("hi");
 
-        List<Message> msgs = chat.messages;
+        List<Message> msgs = chat.getMessages();
         assertEquals(2, msgs.size());
         assertEquals("user", msgs.get(0).getRole());
         assertEquals("hi", msgs.get(0).getContent());
@@ -65,16 +64,14 @@ class SimpleAIChatMockTest {
     @Test
     @DisplayName("上下文对话: 第一轮自我介绍, 第二轮问'我是谁'")
     void contextChat() throws Exception {
-        when(apiClient.sendNonStream(anyString()))
-                .thenReturn("""
-                        {"choices":[{"message":{"role":"assistant","content":"你好张三！很高兴认识你。"}}]}""")
-                .thenReturn("""
-                        {"choices":[{"message":{"role":"assistant","content":"你是张三。"}}]}""");
+        when(apiClient.chat(anyList(), anyList()))
+                .thenReturn(new Message("assistant", "你好张三！很高兴认识你。"))
+                .thenReturn(new Message("assistant", "你是张三。"));
 
         chat.commonResponse("hi,我是张三");
         chat.commonResponse("我是谁");
 
-        List<Message> msgs = chat.messages;
+        List<Message> msgs = chat.getMessages();
         assertEquals(4, msgs.size());
         assertEquals("hi,我是张三", msgs.get(0).getContent());
         assertEquals("你好张三！很高兴认识你。", msgs.get(1).getContent());
@@ -89,15 +86,17 @@ class SimpleAIChatMockTest {
     @Test
     @DisplayName("工具调用: 模型请求执行命令, 工具返回结果, 模型基于结果回答")
     void toolCalling() throws Exception {
-        when(apiClient.sendNonStream(anyString()))
-                .thenReturn("""
-                        {"choices":[{"message":{"role":"assistant","content":null,"tool_calls":[{"id":"call_1","type":"function","function":{"name":"run_shell_command","arguments":"{\\"command\\":\\"echo hello\\"}"}}]}}]}""")
-                .thenReturn("""
-                        {"choices":[{"message":{"role":"assistant","content":"命令执行成功，输出: hello"}}]}""");
+        Message toolCallMsg = new Message("assistant", null, null,
+                List.of(new ToolCall("call_1", "function", "run_shell_command",
+                        "{\"command\":\"echo hello\"}")), null);
+
+        when(apiClient.chat(anyList(), anyList()))
+                .thenReturn(toolCallMsg)
+                .thenReturn(new Message("assistant", "命令执行成功，输出: hello"));
 
         chat.commonResponse("执行 echo hello 命令");
 
-        List<Message> msgs = chat.messages;
+        List<Message> msgs = chat.getMessages();
         assertEquals(4, msgs.size());
         assertEquals("user", msgs.get(0).getRole());
         assertEquals("assistant", msgs.get(1).getRole());
@@ -111,110 +110,27 @@ class SimpleAIChatMockTest {
     }
 
     // ================================================================
-    // 4. parseAssistantMessage
+    // 4. API 错误处理
     // ================================================================
 
-    @Nested
-    @DisplayName("响应解析: parseAssistantMessage")
-    class ParseAssistantMessageTests {
+    @Test
+    @DisplayName("API 错误: ApiException 被捕获并打印, 不崩溃")
+    void apiErrorHandling() throws Exception {
+        when(apiClient.chat(anyList(), anyList()))
+                .thenThrow(new ApiException(401, """
+                        {"error":{"message":"Invalid API key"}}"""));
 
-        @Test
-        @DisplayName("正常解析: 含 content 和 reasoning_content")
-        void withReasoning() throws Exception {
-            String json = """
-                    {"choices":[{"message":{"role":"assistant","content":"答案是42","reasoning_content":"让我想想..."}}]}""";
+        // 不应抛异常, 静默处理
+        chat.commonResponse("hi");
 
-            Message msg = chat.parseAssistantMessage(json);
-
-            assertEquals("assistant", msg.getRole());
-            assertEquals("答案是42", msg.getContent());
-            assertEquals("让我想想...", msg.getReasoningContent());
-            assertNull(msg.getToolCalls());
-        }
-
-        @Test
-        @DisplayName("含 tool_calls: 反序列化为 ToolCall 列表")
-        void withToolCalls() throws Exception {
-            String json = """
-                    {"choices":[{"message":{"role":"assistant","content":null,"tool_calls":[{"id":"call_abc","type":"function","function":{"name":"run_shell_command","arguments":"{\\"command\\":\\"dir\\"}"}}]}}]}""";
-
-            Message msg = chat.parseAssistantMessage(json);
-
-            assertNotNull(msg.getToolCalls());
-            assertEquals(1, msg.getToolCalls().size());
-            ToolCall tc = msg.getToolCalls().get(0);
-            assertEquals("call_abc", tc.getId());
-            assertEquals("function", tc.getType());
-            assertEquals("run_shell_command", tc.getFunction().getName());
-            assertTrue(tc.getFunction().getArguments().contains("dir"));
-        }
+        // messages 中只有 user 消息, assistant 消息未添加
+        List<Message> msgs = chat.getMessages();
+        assertEquals(1, msgs.size());
+        assertEquals("user", msgs.get(0).getRole());
     }
 
     // ================================================================
-    // 5. parseError
-    // ================================================================
-
-    @Nested
-    @DisplayName("错误解析: parseError")
-    class ParseErrorTests {
-
-        @Test
-        @DisplayName("有效错误 JSON: 提取 error.message")
-        void validErrorJson() {
-            String body = """
-                    {"error":{"message":"Invalid API key","type":"auth_error"}}""";
-
-            String result = chat.parseError(body);
-
-            assertEquals("Invalid API key", result);
-        }
-
-        @Test
-        @DisplayName("无效 JSON: 返回原始字符串")
-        void invalidJson() {
-            String body = "<html>500 Internal Server Error</html>";
-
-            String result = chat.parseError(body);
-
-            assertEquals("<html>500 Internal Server Error</html>", result);
-        }
-    }
-
-    // ================================================================
-    // 6. parseDelta
-    // ================================================================
-
-    @Nested
-    @DisplayName("流式增量解析: parseDelta")
-    class ParseDeltaTests {
-
-        @Test
-        @DisplayName("解析 content delta")
-        void contentDelta() throws Exception {
-            String data = """
-                    {"choices":[{"delta":{"content":"你好"}}]}""";
-
-            SimpleAIChat.DeltaResult r = chat.parseDelta(data);
-
-            assertEquals("你好", r.content);
-            assertNull(r.reasoningContent);
-        }
-
-        @Test
-        @DisplayName("解析 reasoning_content delta")
-        void reasoningDelta() throws Exception {
-            String data = """
-                    {"choices":[{"delta":{"reasoning_content":"我需要计算..."}}]}""";
-
-            SimpleAIChat.DeltaResult r = chat.parseDelta(data);
-
-            assertEquals("我需要计算...", r.reasoningContent);
-            assertNull(r.content);
-        }
-    }
-
-    // ================================================================
-    // 7. ShellTool
+    // 5. ShellTool 工具执行
     // ================================================================
 
     @Nested
@@ -245,58 +161,5 @@ class SimpleAIChatMockTest {
             assertNotNull(result);
             assertFalse(result.isBlank());
         }
-    }
-
-    // ================================================================
-    // 8. buildRequestBody
-    // ================================================================
-
-    @Nested
-    @DisplayName("请求体构建: buildRequestBody")
-    class BuildRequestBodyTests {
-
-        @Test
-        @DisplayName("非流式请求体包含 tools 数组")
-        void nonStreamIncludesTools() throws Exception {
-            String body = chat.buildRequestBody(false);
-
-            JsonNode root = MAPPER.readTree(body);
-            assertTrue(root.has("tools"));
-            assertTrue(root.get("tools").isArray());
-            assertEquals(1, root.get("tools").size());
-            assertEquals("run_shell_command",
-                    root.get("tools").get(0).get("function").get("name").asText());
-            assertFalse(root.get("stream").asBoolean());
-        }
-
-        @Test
-        @DisplayName("流式请求体不含 tools, stream=true")
-        void streamExcludesTools() throws Exception {
-            String body = chat.buildRequestBody(true);
-
-            JsonNode root = MAPPER.readTree(body);
-            assertFalse(root.has("tools"));
-            assertTrue(root.get("stream").asBoolean());
-        }
-    }
-
-    // ================================================================
-    // 9. API 错误处理
-    // ================================================================
-
-    @Test
-    @DisplayName("sendChatRequest: 非 200 响应返回错误 Message")
-    void apiErrorReturnsErrorText() throws Exception {
-        when(apiClient.sendNonStream(anyString()))
-                .thenThrow(new ApiException(401, """
-                        {"error":{"message":"Invalid API key"}}"""));
-
-        chat.messages.add(new Message("user", "hi"));
-
-        Message msg = chat.sendChatRequest(false);
-
-        assertEquals("assistant", msg.getRole());
-        assertTrue(msg.getContent().contains("401"));
-        assertTrue(msg.getContent().contains("Invalid API key"));
     }
 }

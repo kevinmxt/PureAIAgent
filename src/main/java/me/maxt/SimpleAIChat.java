@@ -1,51 +1,52 @@
 package me.maxt;
 
-import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
-import com.fasterxml.jackson.databind.node.ArrayNode;
-import com.fasterxml.jackson.databind.node.ObjectNode;
 import me.maxt.api.ApiException;
 import me.maxt.api.ChatApiClient;
 import me.maxt.api.DeepSeekApiClient;
+import me.maxt.api.DeltaEvent;
+import me.maxt.api.DeltaHandler;
 import me.maxt.model.Message;
 import me.maxt.model.ToolCall;
 import me.maxt.tool.ShellTool;
 import me.maxt.tool.Tool;
 
-import java.io.BufferedReader;
-import java.io.InputStreamReader;
-import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Scanner;
 
 /**
- * 最简单的AI对话程序
- * 使用JDK21原生HTTP客户端 + Jackson JSON解析
- * 支持OpenAI兼容接口（可接入各种大模型API）
+ * AI 命令行对话程序。
+ * 对话流程编排，不包含任何模型专属的请求构建/响应解析逻辑。
  */
 public class SimpleAIChat {
-
-    // ============ 配置常量 ============
 
     private static final String API_URL = "https://api.deepseek.com/chat/completions";
     private static final String API_KEY = System.getenv("OPENAI_API_KEY");
     private static final String MODEL_NAME = "deepseek-v4-flash";
     private static final String SYSTEM_PROMPT = "你是一个友好、有帮助的AI助手。请用简洁清晰的中文回答问题。";
     private static final boolean STREAM = false;
-
     private static final ObjectMapper MAPPER = new ObjectMapper();
 
-    // ============ 实例字段 ============
-
     private final ChatApiClient apiClient;
-    final List<Message> messages = new ArrayList<>();
-    final List<String> responses = new ArrayList<>();
-    final List<Tool> tools = List.of(new ShellTool());
+    private final List<Message> messages = new ArrayList<>();
+    private final List<Tool> tools;
 
     public SimpleAIChat(ChatApiClient apiClient) {
         this.apiClient = apiClient;
+        this.tools = new ArrayList<>(List.of(new ShellTool()));
+    }
+
+    SimpleAIChat(ChatApiClient apiClient, List<Tool> tools) {
+        this.apiClient = apiClient;
+        this.tools = new ArrayList<>(tools);
+    }
+
+    // ============ 访问器 ============
+
+    public List<Message> getMessages() {
+        return messages;
     }
 
     // ============ 主程序 ============
@@ -58,7 +59,7 @@ public class SimpleAIChat {
         System.out.println("  输入 'debug' 查看调试信息");
         System.out.println("=================================\n");
 
-        ChatApiClient client = new DeepSeekApiClient(API_URL, API_KEY);
+        ChatApiClient client = new DeepSeekApiClient(API_URL, API_KEY, MODEL_NAME, SYSTEM_PROMPT);
         SimpleAIChat chat = new SimpleAIChat(client);
 
         try (Scanner scanner = new Scanner(System.in)) {
@@ -78,7 +79,7 @@ public class SimpleAIChat {
                     continue;
                 }
                 if ("debug".equals(userInput)) {
-                    System.out.println(chat.responses);
+                    System.out.println(chat.apiClient.getRawResponses());
                     continue;
                 }
 
@@ -100,7 +101,14 @@ public class SimpleAIChat {
         messages.add(new Message("user", userInput));
 
         while (true) {
-            Message assistantMsg = sendChatRequest(false);
+            Message assistantMsg;
+            try {
+                assistantMsg = apiClient.chat(messages, tools);
+            } catch (ApiException e) {
+                System.out.println("API错误 (状态码: " + e.getStatusCode() + "): "
+                        + DeepSeekApiClient.parseError(e.getMessage()));
+                return;
+            }
             messages.add(assistantMsg);
 
             if (assistantMsg.getToolCalls() != null && !assistantMsg.getToolCalls().isEmpty()) {
@@ -127,118 +135,47 @@ public class SimpleAIChat {
     void streamChat(String userMessage) throws Exception {
         messages.add(new Message("user", userMessage));
 
-        String requestBody = buildRequestBody(true);
-        java.io.InputStream bodyStream;
-        try {
-            bodyStream = apiClient.sendStream(requestBody);
-        } catch (ApiException e) {
-            System.out.println("API错误 (状态码: " + e.getStatusCode() + "): " + parseError(e.getMessage()));
-            return;
-        }
-
         StringBuilder contentBuilder = new StringBuilder();
         StringBuilder reasoningBuilder = new StringBuilder();
-        boolean inReasoning = false;
-        boolean startedContent = false;
+        boolean[] inReasoning = {false};
+        boolean[] startedContent = {false};
+
+        DeltaHandler handler = event -> {
+            if (event.reasoningContent() != null && !event.reasoningContent().isEmpty()) {
+                if (!inReasoning[0]) {
+                    System.out.println();
+                    System.out.print("[思考过程] ");
+                    inReasoning[0] = true;
+                }
+                System.out.print(event.reasoningContent());
+                reasoningBuilder.append(event.reasoningContent());
+            }
+
+            if (event.content() != null && !event.content().isEmpty()) {
+                if (inReasoning[0]) {
+                    System.out.println();
+                    System.out.println("---");
+                    System.out.print("AI: ");
+                    inReasoning[0] = false;
+                }
+                if (!startedContent[0]) {
+                    startedContent[0] = true;
+                }
+                System.out.print(event.content());
+                contentBuilder.append(event.content());
+            }
+        };
 
         System.out.print("AI: ");
-        try (BufferedReader reader = new BufferedReader(
-                new InputStreamReader(bodyStream, StandardCharsets.UTF_8))) {
-
-            String line;
-            while ((line = reader.readLine()) != null) {
-                if (line.startsWith("data: ")) {
-                    String data = line.substring(6);
-                    if ("[DONE]".equals(data)) {
-                        break;
-                    }
-
-                    DeltaResult delta = parseDelta(data);
-
-                    if (delta.reasoningContent != null && !delta.reasoningContent.isEmpty()) {
-                        if (!inReasoning) {
-                            System.out.println();
-                            System.out.print("[思考过程] ");
-                            inReasoning = true;
-                        }
-                        System.out.print(delta.reasoningContent);
-                        reasoningBuilder.append(delta.reasoningContent);
-                    }
-
-                    if (delta.content != null && !delta.content.isEmpty()) {
-                        if (inReasoning) {
-                            System.out.println();
-                            System.out.println("---");
-                            System.out.print("AI: ");
-                            inReasoning = false;
-                        }
-                        if (!startedContent) {
-                            startedContent = true;
-                        }
-                        System.out.print(delta.content);
-                        contentBuilder.append(delta.content);
-                    }
-                }
-            }
+        try {
+            Message result = apiClient.chatStream(messages, handler);
+            System.out.println();
+            messages.add(result);
+        } catch (ApiException e) {
+            System.out.println();
+            System.out.println("API错误 (状态码: " + e.getStatusCode() + "): "
+                    + DeepSeekApiClient.parseError(e.getMessage()));
         }
-        System.out.println();
-
-        String fullReasoning = reasoningBuilder.length() > 0 ? reasoningBuilder.toString() : null;
-        messages.add(new Message("assistant", contentBuilder.toString(), fullReasoning, null, null));
-    }
-
-    // ============ 请求构建 ============
-
-    String buildRequestBody(boolean isStream) throws Exception {
-        ObjectNode root = MAPPER.createObjectNode();
-        root.put("model", MODEL_NAME);
-        root.put("temperature", 0.7);
-        root.put("max_tokens", 1000);
-        root.put("stream", isStream);
-
-        ArrayNode messagesArray = root.putArray("messages");
-
-        ObjectNode sysNode = messagesArray.addObject();
-        sysNode.put("role", "system");
-        sysNode.put("content", SYSTEM_PROMPT);
-
-        for (Message msg : messages) {
-            ObjectNode msgNode = messagesArray.addObject();
-            msgNode.put("role", msg.getRole());
-            msgNode.put("content", msg.getContent() != null ? msg.getContent() : "");
-
-            if (msg.getReasoningContent() != null) {
-                msgNode.put("reasoning_content", msg.getReasoningContent());
-            }
-            if (msg.getToolCalls() != null && !msg.getToolCalls().isEmpty()) {
-                ArrayNode tcArray = msgNode.putArray("tool_calls");
-                for (ToolCall tc : msg.getToolCalls()) {
-                    ObjectNode tcNode = tcArray.addObject();
-                    tcNode.put("id", tc.getId());
-                    tcNode.put("type", tc.getType());
-                    ObjectNode funcNode = tcNode.putObject("function");
-                    funcNode.put("name", tc.getFunction().getName());
-                    funcNode.put("arguments", tc.getFunction().getArguments());
-                }
-            }
-            if (msg.getToolCallId() != null) {
-                msgNode.put("tool_call_id", msg.getToolCallId());
-            }
-        }
-
-        if (!isStream && !tools.isEmpty()) {
-            ArrayNode toolsArray = root.putArray("tools");
-            for (Tool tool : tools) {
-                ObjectNode toolNode = toolsArray.addObject();
-                toolNode.put("type", "function");
-                ObjectNode funcNode = toolNode.putObject("function");
-                funcNode.put("name", tool.name());
-                funcNode.put("description", tool.description());
-                funcNode.set("parameters", tool.parameters());
-            }
-        }
-
-        return MAPPER.writeValueAsString(root);
     }
 
     // ============ 工具执行 ============
@@ -255,82 +192,5 @@ public class SimpleAIChat {
         } catch (Exception e) {
             return "工具执行出错: " + e.getMessage();
         }
-    }
-
-    // ============ HTTP 请求 ============
-
-    Message sendChatRequest(boolean isStream) throws Exception {
-        String requestBody = buildRequestBody(isStream);
-
-        try {
-            String responseBody = apiClient.sendNonStream(requestBody);
-            return parseAssistantMessage(responseBody);
-        } catch (ApiException e) {
-            String errorMsg = parseError(e.getMessage());
-            return new Message("assistant", "API错误 (状态码: " + e.getStatusCode() + "): " + errorMsg);
-        }
-    }
-
-    // ============ 响应解析 ============
-
-    Message parseAssistantMessage(String responseBody) throws Exception {
-        responses.add(responseBody);
-        JsonNode root = MAPPER.readTree(responseBody);
-        JsonNode message = root.get("choices").get(0).get("message");
-
-        String content = "";
-        if (message.has("content") && !message.get("content").isNull()) {
-            content = message.get("content").asText();
-        }
-
-        String reasoningContent = null;
-        if (message.has("reasoning_content") && !message.get("reasoning_content").isNull()) {
-            reasoningContent = message.get("reasoning_content").asText();
-        }
-
-        List<ToolCall> toolCalls = null;
-        if (message.has("tool_calls") && message.get("tool_calls").isArray()) {
-            toolCalls = MAPPER.readValue(
-                    message.get("tool_calls").traverse(),
-                    new TypeReference<List<ToolCall>>() {});
-        }
-
-        return new Message("assistant", content, reasoningContent, toolCalls, null);
-    }
-
-    DeltaResult parseDelta(String data) throws Exception {
-        responses.add(data);
-        JsonNode chunk = MAPPER.readTree(data);
-        JsonNode choice = chunk.get("choices").get(0);
-        JsonNode delta = choice.get("delta");
-
-        DeltaResult result = new DeltaResult();
-
-        if (delta.has("content") && !delta.get("content").isNull()) {
-            result.content = delta.get("content").asText();
-        }
-        if (delta.has("reasoning_content") && !delta.get("reasoning_content").isNull()) {
-            result.reasoningContent = delta.get("reasoning_content").asText();
-        }
-
-        return result;
-    }
-
-    String parseError(String responseBody) {
-        try {
-            JsonNode root = MAPPER.readTree(responseBody);
-            if (root.has("error") && root.get("error").has("message")) {
-                return root.get("error").get("message").asText();
-            }
-        } catch (Exception ignored) {
-        }
-        return responseBody;
-    }
-
-    // ============ 内部类 ============
-
-    static class DeltaResult {
-        String content;
-        String reasoningContent;
     }
 }
