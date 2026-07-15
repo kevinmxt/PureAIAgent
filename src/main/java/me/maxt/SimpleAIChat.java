@@ -5,6 +5,9 @@ import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.ArrayNode;
 import com.fasterxml.jackson.databind.node.ObjectNode;
+import me.maxt.api.ApiException;
+import me.maxt.api.ChatApiClient;
+import me.maxt.api.DeepSeekApiClient;
 import me.maxt.model.Message;
 import me.maxt.model.ToolCall;
 import me.maxt.tool.ShellTool;
@@ -12,10 +15,6 @@ import me.maxt.tool.Tool;
 
 import java.io.BufferedReader;
 import java.io.InputStreamReader;
-import java.net.URI;
-import java.net.http.HttpClient;
-import java.net.http.HttpRequest;
-import java.net.http.HttpResponse;
 import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.List;
@@ -28,7 +27,7 @@ import java.util.Scanner;
  */
 public class SimpleAIChat {
 
-    // ============ 配置区域 ============
+    // ============ 配置常量 ============
 
     private static final String API_URL = "https://api.deepseek.com/chat/completions";
     private static final String API_KEY = System.getenv("OPENAI_API_KEY");
@@ -37,9 +36,17 @@ public class SimpleAIChat {
     private static final boolean STREAM = false;
 
     private static final ObjectMapper MAPPER = new ObjectMapper();
-    private static final List<Message> MESSAGES = new ArrayList<>();
-    private static final List<String> RESPONSES = new ArrayList<>();
-    private static final List<Tool> TOOLS = List.of(new ShellTool());
+
+    // ============ 实例字段 ============
+
+    private final ChatApiClient apiClient;
+    final List<Message> messages = new ArrayList<>();
+    final List<String> responses = new ArrayList<>();
+    final List<Tool> tools = List.of(new ShellTool());
+
+    public SimpleAIChat(ChatApiClient apiClient) {
+        this.apiClient = apiClient;
+    }
 
     // ============ 主程序 ============
 
@@ -51,39 +58,36 @@ public class SimpleAIChat {
         System.out.println("  输入 'debug' 查看调试信息");
         System.out.println("=================================\n");
 
-        try (HttpClient httpClient = HttpClient.newBuilder()
-                .version(HttpClient.Version.HTTP_1_1)
-                .build()) {
+        ChatApiClient client = new DeepSeekApiClient(API_URL, API_KEY);
+        SimpleAIChat chat = new SimpleAIChat(client);
 
-            try (Scanner scanner = new Scanner(System.in)) {
-                while (true) {
-                    System.out.print("\n你: ");
-                    String userInput = scanner.nextLine().trim();
+        try (Scanner scanner = new Scanner(System.in)) {
+            while (true) {
+                System.out.print("\n你: ");
+                String userInput = scanner.nextLine().trim();
 
-                    if (userInput.isEmpty()) {
-                        continue;
-                    }
-                    if ("退出".equals(userInput) || "exit".equalsIgnoreCase(userInput)) {
-                        System.out.println("再见！期待下次对话~");
-                        break;
-                    }
-                    if ("对话历史".equals(userInput) || "history".equalsIgnoreCase(userInput)) {
-                        System.out.println(MESSAGES);
-                        continue;
-                    }
-                    if ("debug".equals(userInput)) {
-                        System.out.println(RESPONSES);
-                        continue;
-                    }
+                if (userInput.isEmpty()) {
+                    continue;
+                }
+                if ("退出".equals(userInput) || "exit".equalsIgnoreCase(userInput)) {
+                    System.out.println("再见！期待下次对话~");
+                    break;
+                }
+                if ("对话历史".equals(userInput) || "history".equalsIgnoreCase(userInput)) {
+                    System.out.println(chat.messages);
+                    continue;
+                }
+                if ("debug".equals(userInput)) {
+                    System.out.println(chat.responses);
+                    continue;
+                }
 
-                    if (STREAM) {
-                        streamChat(httpClient, userInput);
-                    } else {
-                        commonResponse(httpClient, userInput);
-                    }
+                if (STREAM) {
+                    chat.streamChat(userInput);
+                } else {
+                    chat.commonResponse(userInput);
                 }
             }
-
         } catch (Exception e) {
             System.err.println("程序运行出错: " + e.getMessage());
             e.printStackTrace();
@@ -92,19 +96,19 @@ public class SimpleAIChat {
 
     // ============ 非流式对话 ============
 
-    private static void commonResponse(HttpClient httpClient, String userInput) throws Exception {
-        MESSAGES.add(new Message("user", userInput));
+    void commonResponse(String userInput) throws Exception {
+        messages.add(new Message("user", userInput));
 
         while (true) {
-            Message assistantMsg = sendChatRequest(httpClient, false);
-            MESSAGES.add(assistantMsg);
+            Message assistantMsg = sendChatRequest(false);
+            messages.add(assistantMsg);
 
             if (assistantMsg.getToolCalls() != null && !assistantMsg.getToolCalls().isEmpty()) {
                 for (ToolCall tc : assistantMsg.getToolCalls()) {
                     System.out.println("[工具调用] " + tc.getFunction().getName());
                     String result = executeTool(tc);
                     System.out.println("[工具结果] " + result);
-                    MESSAGES.add(new Message("tool", result, null, null, tc.getId()));
+                    messages.add(new Message("tool", result, null, null, tc.getId()));
                 }
                 continue;
             }
@@ -120,23 +124,15 @@ public class SimpleAIChat {
 
     // ============ 流式对话 ============
 
-    private static void streamChat(HttpClient client, String userMessage) throws Exception {
-        MESSAGES.add(new Message("user", userMessage));
+    void streamChat(String userMessage) throws Exception {
+        messages.add(new Message("user", userMessage));
 
         String requestBody = buildRequestBody(true);
-        HttpRequest request = HttpRequest.newBuilder()
-                .uri(URI.create(API_URL))
-                .header("Content-Type", "application/json")
-                .header("Authorization", "Bearer " + API_KEY)
-                .POST(HttpRequest.BodyPublishers.ofString(requestBody, StandardCharsets.UTF_8))
-                .build();
-
-        HttpResponse<java.io.InputStream> response = client.send(request,
-                HttpResponse.BodyHandlers.ofInputStream());
-
-        if (response.statusCode() != 200) {
-            String errorBody = new String(response.body().readAllBytes(), StandardCharsets.UTF_8);
-            System.out.println("API错误 (状态码: " + response.statusCode() + "): " + parseError(errorBody));
+        java.io.InputStream bodyStream;
+        try {
+            bodyStream = apiClient.sendStream(requestBody);
+        } catch (ApiException e) {
+            System.out.println("API错误 (状态码: " + e.getStatusCode() + "): " + parseError(e.getMessage()));
             return;
         }
 
@@ -147,7 +143,7 @@ public class SimpleAIChat {
 
         System.out.print("AI: ");
         try (BufferedReader reader = new BufferedReader(
-                new InputStreamReader(response.body(), StandardCharsets.UTF_8))) {
+                new InputStreamReader(bodyStream, StandardCharsets.UTF_8))) {
 
             String line;
             while ((line = reader.readLine()) != null) {
@@ -188,12 +184,12 @@ public class SimpleAIChat {
         System.out.println();
 
         String fullReasoning = reasoningBuilder.length() > 0 ? reasoningBuilder.toString() : null;
-        MESSAGES.add(new Message("assistant", contentBuilder.toString(), fullReasoning, null, null));
+        messages.add(new Message("assistant", contentBuilder.toString(), fullReasoning, null, null));
     }
 
     // ============ 请求构建 ============
 
-    private static String buildRequestBody(boolean isStream) throws Exception {
+    String buildRequestBody(boolean isStream) throws Exception {
         ObjectNode root = MAPPER.createObjectNode();
         root.put("model", MODEL_NAME);
         root.put("temperature", 0.7);
@@ -206,7 +202,7 @@ public class SimpleAIChat {
         sysNode.put("role", "system");
         sysNode.put("content", SYSTEM_PROMPT);
 
-        for (Message msg : MESSAGES) {
+        for (Message msg : messages) {
             ObjectNode msgNode = messagesArray.addObject();
             msgNode.put("role", msg.getRole());
             msgNode.put("content", msg.getContent() != null ? msg.getContent() : "");
@@ -230,9 +226,9 @@ public class SimpleAIChat {
             }
         }
 
-        if (!isStream && !TOOLS.isEmpty()) {
+        if (!isStream && !tools.isEmpty()) {
             ArrayNode toolsArray = root.putArray("tools");
-            for (Tool tool : TOOLS) {
+            for (Tool tool : tools) {
                 ObjectNode toolNode = toolsArray.addObject();
                 toolNode.put("type", "function");
                 ObjectNode funcNode = toolNode.putObject("function");
@@ -247,10 +243,10 @@ public class SimpleAIChat {
 
     // ============ 工具执行 ============
 
-    private static String executeTool(ToolCall tc) {
+    String executeTool(ToolCall tc) {
         try {
             JsonNode args = MAPPER.readTree(tc.getFunction().getArguments());
-            for (Tool tool : TOOLS) {
+            for (Tool tool : tools) {
                 if (tool.name().equals(tc.getFunction().getName())) {
                     return tool.execute(args);
                 }
@@ -263,30 +259,22 @@ public class SimpleAIChat {
 
     // ============ HTTP 请求 ============
 
-    private static Message sendChatRequest(HttpClient client, boolean isStream) throws Exception {
+    Message sendChatRequest(boolean isStream) throws Exception {
         String requestBody = buildRequestBody(isStream);
 
-        HttpRequest request = HttpRequest.newBuilder()
-                .uri(URI.create(API_URL))
-                .header("Content-Type", "application/json")
-                .header("Authorization", "Bearer " + API_KEY)
-                .POST(HttpRequest.BodyPublishers.ofString(requestBody, StandardCharsets.UTF_8))
-                .build();
-
-        HttpResponse<String> response = client.send(request, HttpResponse.BodyHandlers.ofString());
-
-        if (response.statusCode() == 200) {
-            return parseAssistantMessage(response.body());
-        } else {
-            String errorMsg = parseError(response.body());
-            return new Message("assistant", "API错误 (状态码: " + response.statusCode() + "): " + errorMsg);
+        try {
+            String responseBody = apiClient.sendNonStream(requestBody);
+            return parseAssistantMessage(responseBody);
+        } catch (ApiException e) {
+            String errorMsg = parseError(e.getMessage());
+            return new Message("assistant", "API错误 (状态码: " + e.getStatusCode() + "): " + errorMsg);
         }
     }
 
     // ============ 响应解析 ============
 
-    private static Message parseAssistantMessage(String responseBody) throws Exception {
-        RESPONSES.add(responseBody);
+    Message parseAssistantMessage(String responseBody) throws Exception {
+        responses.add(responseBody);
         JsonNode root = MAPPER.readTree(responseBody);
         JsonNode message = root.get("choices").get(0).get("message");
 
@@ -310,8 +298,8 @@ public class SimpleAIChat {
         return new Message("assistant", content, reasoningContent, toolCalls, null);
     }
 
-    private static DeltaResult parseDelta(String data) throws Exception {
-        RESPONSES.add(data);
+    DeltaResult parseDelta(String data) throws Exception {
+        responses.add(data);
         JsonNode chunk = MAPPER.readTree(data);
         JsonNode choice = chunk.get("choices").get(0);
         JsonNode delta = choice.get("delta");
@@ -328,7 +316,7 @@ public class SimpleAIChat {
         return result;
     }
 
-    private static String parseError(String responseBody) {
+    String parseError(String responseBody) {
         try {
             JsonNode root = MAPPER.readTree(responseBody);
             if (root.has("error") && root.get("error").has("message")) {
@@ -341,7 +329,7 @@ public class SimpleAIChat {
 
     // ============ 内部类 ============
 
-    private static class DeltaResult {
+    static class DeltaResult {
         String content;
         String reasoningContent;
     }
