@@ -56,6 +56,7 @@ public class SimpleAIChat {
         System.out.println("  简单AI对话程序 (JDK21原生实现)");
         System.out.println("  输入 '退出' 或 'exit' 结束对话");
         System.out.println("  输入 '对话历史' 或 'history' 查看历史对话");
+        System.out.println("  输入 '清空历史' 或 'clear' 清除历史对话");
         System.out.println("  输入 'debug' 查看调试信息");
         System.out.println("=================================\n");
 
@@ -76,6 +77,11 @@ public class SimpleAIChat {
                 }
                 if ("对话历史".equals(userInput) || "history".equalsIgnoreCase(userInput)) {
                     System.out.println(chat.messages);
+                    continue;
+                }
+                if ("清空历史".equals(userInput) || "clear".equalsIgnoreCase(userInput)) {
+                    chat.messages.clear();
+                    System.out.println("已清空对话历史");
                     continue;
                 }
                 if ("debug".equals(userInput)) {
