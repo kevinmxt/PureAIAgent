@@ -12,9 +12,14 @@ import me.maxt.model.ToolCall;
 import me.maxt.tool.ShellTool;
 import me.maxt.tool.Tool;
 
+import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.List;
-import java.util.Scanner;
+
+import org.jline.reader.LineReader;
+import org.jline.reader.LineReaderBuilder;
+import org.jline.terminal.Terminal;
+import org.jline.terminal.TerminalBuilder;
 
 /**
  * AI 命令行对话程序。
@@ -63,10 +68,20 @@ public class SimpleAIChat {
         ChatApiClient client = new DeepSeekApiClient(API_URL, API_KEY, MODEL_NAME, SYSTEM_PROMPT);
         SimpleAIChat chat = new SimpleAIChat(client);
 
-        try (Scanner scanner = new Scanner(System.in)) {
+        try {
+            Terminal terminal = TerminalBuilder.builder()
+                    .encoding(StandardCharsets.UTF_8)
+                    .build();
+            LineReader reader = LineReaderBuilder.builder()
+                    .terminal(terminal)
+                    .build();
+
             while (true) {
-                System.out.print("\n你: ");
-                String userInput = scanner.nextLine().trim();
+                String userInput = reader.readLine("\n你: ");
+                if (userInput == null) {
+                    break;
+                }
+                userInput = userInput.trim();
 
                 if (userInput.isEmpty()) {
                     continue;

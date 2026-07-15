@@ -41,8 +41,9 @@ src/test/java/me/maxt/
 │ 不包含: 请求体构建、JSON解析、SSE解析                        │
 ├────────────────────────────────────────────────────────────┤
 │ main()                                                      │
-│   └─ new DeepSeekApiClient(url,key,model,prompt)            │
-│      → new SimpleAIChat(client) → 主循环                    │
+│   └─ TerminalBuilder(UTF-8) → LineReader                    │
+│      └─ new DeepSeekApiClient(url,key,model,prompt)          │
+│         → new SimpleAIChat(client) → 主循环                  │
 ├────────────────────────────────────────────────────────────┤
 │ ◆ commonResponse(userInput)                                 │
 │   ┌──────────────────────────────────────────────┐         │
