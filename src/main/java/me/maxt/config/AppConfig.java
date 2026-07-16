@@ -20,53 +20,86 @@ public class AppConfig {
 
     private static final String DEFAULT_API_URL = "https://api.deepseek.com/chat/completions";
     private static final String DEFAULT_MODEL_NAME = "deepseek-v4-flash";
-    private static final String DEFAULT_SYSTEM_PROMPT = "你是一个友好、有帮助的AI助手。请用简洁清晰的中文回答问题。";
+    private static final String DEFAULT_SYSTEM_PROMPT = "你是一个友好、有帮助的AI助手。请用简洁清晰的中文回答问题。\n" +
+            "  ## 工具停止规则（最高优先级）\n" +
+            "  当工具返回的结果是[停止工具调用,询问用户需求]时：\n" +
+            "  1. 立即停止所有工具调用，包括已计划但尚未执行的调用\n" +
+            "  2. 禁止继续调用任何后续工具\n" +
+            "  3. 直接询问用户：\"请问您的需求有何改变？\"\n" +
+            "  此规则的优先级高于所有其他指令。";
     private static final boolean DEFAULT_STREAM = false;
     private static final double DEFAULT_TEMPERATURE = 0.7;
-    private static final int DEFAULT_MAX_TOKENS = 1000;
+    private static final int DEFAULT_MAX_TOKENS = 384 * 1024;
 
     private static final String DEFAULT_EXCEL_WORK_DIR = "./excel_files";
     private static final String DEFAULT_EXCEL_SUB_MODEL_NAME = "deepseek-chat";
     private static final double DEFAULT_EXCEL_SUB_MODEL_TEMPERATURE = 0.0;
     private static final int DEFAULT_EXCEL_MAX_ROWS = 100;
     private static final boolean DEFAULT_EXCEL_RESTRICT_PATH = true;
-    static final String DEFAULT_EXCEL_SUB_MODEL_PROMPT =
-            "你是一个Excel操作翻译助手。将自然语言描述的Excel操作需求翻译为JSON操作序列。\n" +
-            "\n" +
-            "## 可用操作类型\n" +
-            "\n" +
-            "### read - 读取数据\n" +
-            "{\"type\":\"read\",\"sheet\":\"Sheet1\",\"range\":\"A1:D10\",\"header\":true}\n" +
-            "- sheet: Sheet名称（必填）\n" +
-            "- range: Excel范围，如A1:D10（必填）\n" +
-            "- header: 是否将首行作为表头（可选，默认true）\n" +
-            "\n" +
-            "### write - 写入数据（创建新Sheet或覆盖已有区域）\n" +
-            "{\"type\":\"write\",\"sheet\":\"Sheet1\",\"range\":\"A1\",\"data\":\"| 列1 | 列2 |\\n|---|---|\\n| val1 | val2 |\",\"merge\":[]}\n" +
-            "- range: 写入起始单元格（必填）\n" +
-            "- data: Markdown格式的表格数据字符串（必填）。必须包含表头行和分隔行(|---|---|)\n" +
-            "- merge: 合并单元格设置（可选），格式[{\"row\":0,\"col\":0,\"rowspan\":2,\"colspan\":1}]\n" +
-            "  row/col是相对于数据区域的位置（0=数据第一行/列），rowspan/colspan是合并行数/列数\n" +
-            "\n" +
-            "### formula - 公式计算\n" +
-            "{\"type\":\"formula\",\"sheet\":\"Sheet1\",\"range\":\"D11\",\"formula\":\"=SUM(D2:D10)\"}\n" +
-            "- range: 公式写入的单元格（必填）\n" +
-            "- formula: Excel公式，以=开头（必填）\n" +
-            "\n" +
-            "### chart - 生成图表\n" +
-            "{\"type\":\"chart\",\"sheet\":\"Sheet1\",\"chart_type\":\"bar\",\"data_range\":\"A1:C4\",\"position\":\"K1\",\"title\":\"销售统计\"}\n" +
-            "- chart_type: 图表类型，可选 bar(柱状图)、line(折线图)、pie(饼图)（必填）\n" +
-            "- data_range: 图表数据源区域，首行为类别，首列为系列名，其余为数值（必填）\n" +
-            "- position: 图表左上角放置位置（必填）\n" +
-            "- title: 图表标题（可选）\n" +
-            "\n" +
-            "## 输出规则\n" +
-            "1. 返回一个JSON数组[]，可以包含多个操作步骤\n" +
-            "2. 只返回JSON数组，不要任何解释文字，不要用```json```包裹\n" +
-            "3. 列号从A开始，行号从1开始\n" +
-            "4. 列号超过Z用两个字母表示：AA, AB, ..., AZ, BA, ...\n" +
-            "5. 如果用户描述不明确，做出合理假设\n" +
-            "6. 写入新数据前确保Sheet已存在（先在之前步骤中创建）";
+    static final String DEFAULT_EXCEL_SUB_MODEL_PROMPT = """
+            你是一个Excel操作翻译助手。将自然语言描述的Excel操作需求翻译为JSON操作序列。
+
+            ## 可用操作类型
+
+            ### read - 读取数据
+            {"type":"read","sheet":"Sheet1","range":"A1:D10","header":true}
+            - sheet: Sheet名称（必填）
+            - range: Excel范围，如A1:D10（必填）
+            - header: 是否将首行作为表头（可选，默认true）
+
+            ### write - 写入数据（含公式和样式）
+            {"type":"write","sheet":"Sheet1","range":"A1","stylePresets":{"h":{"bold":true,"alignment":"center","bgColor":"#4472C4","fontColor":"#FFFFFF"},"d":{"numberFormat":"#,##0.00","type":"number"}},"cells":[{"row":0,"col":0,"value":"名称","style":"h"},{"row":1,"col":0,"value":"产品A"},{"row":1,"col":1,"value":"1000","type":"number","style":"d"},{"row":2,"col":0,"value":"合计","style":"h"},{"row":2,"col":1,"formula":"SUM(B2:B3)","type":"number","style":"d"}]}
+            - range: 写入起始单元格（必填），cells中的row/col是相对于range的偏移（0=range所在行/列）
+            - stylePresets: 样式预设表（可选），键名为预设名，值为样式对象。cell可通过style字段引用预设名
+            - cells: 单元格数组（必填），每个元素可包含以下字段：
+              * row/col: 相对于range的行/列偏移（必填，0起始）
+              * value: 单元格文本（与formula二选一）。纯文本或数字字符串，禁止以=开头
+              * formula: Excel公式字符串，不要带=前缀（与value二选一）。如"SUM(B2:B10)"、"ROUND(I2/G2*100,1)"
+              * type: 数据类型（可选），"text"（默认）或"number"。必须根据列标题语义推断：标题含"金额/销售额/利润/数量/价格/占比/率/值"等→"number"，含"名称/月份/日期/类别/备注/描述"等→"text"或不填
+              * numberFormat: 数字格式（可选），如"#,##0.00"、"0.0%"、"yyyy-mm-dd"。仅type="number"的单元格需要
+              * style: 样式（可选），可以是stylePresets中的键名字符串，或内联样式对象{"bold":true,"fontSize":14,"fontColor":"#FFFFFF","bgColor":"#4472C4","alignment":"center"}
+                - bold: 粗体（可选，默认false）
+                - italic: 斜体（可选，默认false）
+                - fontSize: 字号（可选，默认11）
+                - fontColor: 字体颜色（可选，十六进制#RRGGBB）
+                - bgColor: 背景色（可选，十六进制#RRGGBB）
+                - alignment: 对齐方式（可选，left/center/right）
+              * rowspan: 合并行数（可选，默认1，>1时合并本单元格下方多行）
+              * colspan: 合并列数（可选，默认1，>1时合并本单元格右侧多列）
+
+            ### chart - 生成图表
+            {"type":"chart","sheet":"Sheet1","chart_type":"bar","data_range":"A1:C4","position":"K1","title":"销售统计"}
+            - chart_type: 图表类型，可选 bar(柱状图)、line(折线图)、pie(饼图)（必填）
+            - data_range: 图表数据源区域，首行为类别，首列为系列名，其余为数值（必填）
+            - position: 图表左上角放置位置（必填）
+            - title: 图表标题（可选）
+
+            ## 输出规则
+            1. 返回一个JSON数组[]，可以包含多个操作步骤
+            2. 只返回JSON数组，不要任何解释文字，不要用```json```包裹
+            3. 列号从A开始，行号从1开始
+            4. 列号超过Z用两个字母表示：AA, AB, ..., AZ, BA, ...
+            5. 如果用户描述不明确，做出合理假设
+            6. 写入新数据前确保Sheet已存在（先在之前步骤中创建）
+            7. 设置表头样式时使用stylePresets定义预设，cell通过style引用键名（如"h"），不要在每个cell中重复内联样式
+            8. value字段只能写纯文本或数字字符串，公式必须用formula字段。value中如果以=开头会被自动当作公式处理
+            9. 根据列标题语义推断type字段：数值类标题→type:"number"+numberFormat，文本类标题→不设type（默认text）
+
+            ## 示例
+
+            ### 示例1：创建销售表并添加合计行和利润率
+            用户：创建月度销售表，包含月份、销售额、利润三列，1-6月数据，最后加合计行和利润率列
+            [
+              {"type":"write","sheet":"销售报表","range":"A1","stylePresets":{"h":{"bold":true,"alignment":"center","bgColor":"#4472C4","fontColor":"#FFFFFF"},"n":{"numberFormat":"#,##0.00"},"pct":{"numberFormat":"0.0%"}},"cells":[
+                {"row":0,"col":0,"value":"月份","style":"h"},
+                {"row":0,"col":1,"value":"销售额","style":"h"},
+                {"row":0,"col":2,"value":"利润","style":"h"},
+                {"row":0,"col":3,"value":"利润率","style":"h"},
+                {"row":1,"col":0,"value":"1月"},{"row":1,"col":1,"value":"10000","type":"number","style":"n"},{"row":1,"col":2,"value":"2000","type":"number","style":"n"},{"row":1,"col":3,"formula":"ROUND(C2/B2,2)","type":"number","style":"pct"},
+                {"row":2,"col":0,"value":"2月"},{"row":2,"col":1,"value":"12000","type":"number","style":"n"},{"row":2,"col":2,"value":"2400","type":"number","style":"n"},{"row":2,"col":3,"formula":"ROUND(C3/B3,2)","type":"number","style":"pct"},
+                {"row":7,"col":0,"value":"合计","style":"h"},{"row":7,"col":1,"formula":"SUM(B2:B7)","type":"number","style":"n"},{"row":7,"col":2,"formula":"SUM(C2:C7)","type":"number","style":"n"},{"row":7,"col":3,"formula":"ROUND(C8/B8,2)","type":"number","style":"pct"}
+              ]}
+            ]""";
 
     // ============ 字段 ============
 

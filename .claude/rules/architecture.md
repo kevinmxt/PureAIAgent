@@ -126,8 +126,7 @@ src/test/java/me/maxt/
                    ├────────────────────────────────┤
                    │ ExcelOperationExecutor          │
                    │ ├─ read → Markdown表格+merge信息 │
-                   │ ├─ write → Markdown→Excel       │
-                   │ ├─ formula → 写入公式+即时求值    │
+                   │ ├─ write → cells数组→Excel(含公式)│
                    │ └─ chart → 柱状图/折线图/饼图    │
                    └────────────────────────────────┘
 ```
@@ -189,7 +188,7 @@ SimpleAIChat.main()
 |------|------|----------|------|
 | Mock 单元测试 | `SimpleAIChatMockTest.java` | `mvn test` | Mock ChatApiClient, 测试对话流程 |
 | 解析测试 | `DeepSeekApiClientTest.java` | `mvn test` | 测试响应解析准确性 |
-| Excel 引擎测试 | `ExcelOperationExecutorTest.java` | `mvn test` | 测试 POI 操作：坐标解析、Markdown解析、read/write/formula/chart |
+| Excel 引擎测试 | `ExcelOperationExecutorTest.java` | `mvn test` | 测试 POI 操作：坐标解析、read/write/chart、cells 数组格式、公式写入、样式预设、类型推断 |
 | 集成测试 | `SimpleAIChatIntegrationTest.java` | `mvn test -Pintegration` | 真实 API, 需 `OPENAI_API_KEY` |
 
 ## 扩展指南
@@ -199,7 +198,7 @@ SimpleAIChat.main()
 
 ### ExcelTool 架构要点
 - **子模型 LLM**: ExcelTool 内部创建独立的 `DeepSeekApiClient` 实例，通过 `config.properties` 中 `excel.sub_model.*` 系列配置项控制（默认复用主模型 URL 和 Key）
-- **NL→JSON 翻译**: 子模型将自然语言指令翻译为 JSON 操作序列（四种类型: read/write/formula/chart），ExcelOperationExecutor 逐条执行
+- **NL→JSON 翻译**: 子模型将自然语言指令翻译为 JSON 操作序列（三种类型: read/write/chart），公式已合并进 write 操作。write 使用 cells 数组格式，每个 cell 独立声明 value/formula、type（number/text）、numberFormat、style（支持 stylePresets 预设表）、rowspan/colspan
 - **文件安全**: 默认仅允许操作 `excel.work.dir` 目录下的文件，可在配置中关闭限制
 - **关键约束**: 同一个文件只能被 `new XSSFWorkbook()` 打开一次，`buildFileContext` 不再单独打开文件
 - **POI 双写陷阱**: `XSSFWorkbook.write(OutputStream)` 后调用 `close()` 会触发 `OPCPackage.saveImpl()` 内部重新保存到原始文件，覆盖已写入内容并抛出 `EOFException: Unexpected end of ZLIB input stream`。正确做法: write 到 `ByteArrayOutputStream` → close workbook → 写字节到文件

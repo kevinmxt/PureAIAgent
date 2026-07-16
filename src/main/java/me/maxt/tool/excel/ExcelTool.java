@@ -66,8 +66,8 @@ public class ExcelTool implements Tool {
 
     @Override
     public String description() {
-        return "操作Excel(.xlsx)文件：读取数据（返回Markdown表格）、创建/写入数据（接受Markdown表格）、"
-                + "使用Excel公式计算（写入公式并即时求值）、生成图表（柱状图/折线图/饼图，嵌入Excel）。"
+        return "操作Excel(.xlsx)文件：读取数据（返回Markdown表格）、创建/写入数据（含公式和样式）、"
+                + "生成图表（柱状图/折线图/饼图，嵌入Excel）。"
                 + "只需要用自然语言描述需求，例如\"读取Sheet1的销售数据\"、"
                 + "\"创建一个包含产品名和销量的表格\"、\"对B列求平均值\"、\"生成柱状图\"。";
     }
@@ -132,7 +132,7 @@ public class ExcelTool implements Tool {
         for (int i = 0; i < operations.size(); i++) {
             JsonNode op = operations.get(i);
             String opType = op.has("type") ? op.get("type").asText() : "未知";
-            if ("write".equals(opType) || "formula".equals(opType) || "chart".equals(opType)) {
+            if ("write".equals(opType) || "chart".equals(opType)) {
                 hasModifications = true;
             }
             try {

@@ -4,14 +4,11 @@ import com.fasterxml.jackson.databind.JsonNode;
 import me.maxt.config.AppConfig;
 import org.apache.poi.ss.usermodel.*;
 import org.apache.poi.ss.util.CellRangeAddress;
-import org.apache.poi.ss.util.CellReference;
 import org.apache.poi.xddf.usermodel.chart.*;
 import org.apache.poi.xssf.usermodel.*;
 
 import java.util.ArrayList;
-import java.util.Arrays;
 import java.util.List;
-import java.util.stream.Collectors;
 
 /**
  * POI 操作引擎，根据 JSON 操作步骤执行具体的 Excel 读写/公式/图表操作。
@@ -29,12 +26,11 @@ public class ExcelOperationExecutor {
     public String execute(Workbook workbook, JsonNode operation) throws Exception {
         String type = operation.has("type") ? operation.get("type").asText() : "";
         return switch (type) {
-            case "read"    -> executeRead(workbook, operation);
-            case "write"   -> executeWrite(workbook, operation);
-            case "formula" -> executeFormula(workbook, operation);
-            case "chart"   -> executeChart(workbook, operation);
+            case "read"  -> executeRead(workbook, operation);
+            case "write" -> executeWrite(workbook, operation);
+            case "chart" -> executeChart(workbook, operation);
             default -> throw new IllegalArgumentException("未知操作类型: " + type
-                    + "（支持: read, write, formula, chart）");
+                    + "（支持: read, write, chart）");
         };
     }
 
@@ -132,94 +128,191 @@ public class ExcelOperationExecutor {
     private String executeWrite(Workbook wb, JsonNode op) {
         String sheetName = op.has("sheet") ? op.get("sheet").asText() : "Sheet1";
         String rangeStart = op.get("range").asText();
-        String mdTable = op.get("data").asText();
+        JsonNode cells = op.get("cells");
 
         Sheet sheet = wb.getSheet(sheetName);
         if (sheet == null) sheet = wb.createSheet(sheetName);
 
-        String[][] data = parseMarkdownTable(mdTable);
-        if (data.length == 0) throw new IllegalArgumentException("写入数据为空，请提供Markdown格式的表格数据");
+        if (cells == null || !cells.isArray() || cells.size() == 0) {
+            throw new IllegalArgumentException("cells 数组为空或缺失，请提供至少一个单元格数据");
+        }
 
         int startCol = parseCol(rangeStart);
         int startRow = parseRow(rangeStart);
 
-        // 写入数据
-        CellStyle headerStyle = createHeaderStyle(wb);
-        CellStyle dataStyle = createDataStyle(wb);
-
-        for (int r = 0; r < data.length; r++) {
-            Row row = sheet.getRow(startRow + r);
-            if (row == null) row = sheet.createRow(startRow + r);
-            for (int c = 0; c < data[r].length; c++) {
-                Cell cell = row.createCell(startCol + c);
-                cell.setCellValue(data[r][c]);
-                cell.setCellStyle(r == 0 ? headerStyle : dataStyle);
+        // 解析样式预设
+        java.util.Map<String, JsonNode> presets = new java.util.LinkedHashMap<>();
+        if (op.has("stylePresets") && op.get("stylePresets").isObject()) {
+            var sp = op.get("stylePresets");
+            var fieldNames = sp.fieldNames();
+            while (fieldNames.hasNext()) {
+                String key = fieldNames.next();
+                presets.put(key, sp.get(key));
             }
         }
 
-        // 合并单元格
+        int writeCount = 0;
+        int formulaCount = 0;
         int mergeCount = 0;
-        if (op.has("merge") && op.get("merge").isArray()) {
-            for (JsonNode mergeNode : op.get("merge")) {
-                int mr = mergeNode.get("row").asInt() + startRow;
-                int mc = mergeNode.get("col").asInt() + startCol;
-                int rs = mergeNode.get("rowspan").asInt();
-                int cs = mergeNode.get("colspan").asInt();
-                if (rs > 1 || cs > 1) {
-                    sheet.addMergedRegion(new CellRangeAddress(mr, mr + rs - 1, mc, mc + cs - 1));
-                    mergeCount++;
+        int maxDataCol = 0;
+
+        for (JsonNode cellNode : cells) {
+            int rowOff = cellNode.get("row").asInt();
+            int colOff = cellNode.get("col").asInt();
+            int rowIdx = startRow + rowOff;
+            int colIdx = startCol + colOff;
+            maxDataCol = Math.max(maxDataCol, colOff);
+
+            Row row = sheet.getRow(rowIdx);
+            if (row == null) row = sheet.createRow(rowIdx);
+            Cell cell = row.getCell(colIdx);
+            if (cell == null) cell = row.createCell(colIdx);
+
+            // 设置值或公式
+            if (cellNode.has("formula") && !cellNode.get("formula").isNull()) {
+                String formula = cellNode.get("formula").asText();
+                cell.setCellFormula(stripFormulaPrefix(formula));
+                formulaCount++;
+            } else if (cellNode.has("value") && !cellNode.get("value").isNull()) {
+                String value = cellNode.get("value").asText();
+                if (value.startsWith("=")) {
+                    cell.setCellFormula(stripFormulaPrefix(value));
+                    formulaCount++;
+                } else {
+                    if ("number".equals(cellNode.has("type") ? cellNode.get("type").asText() : "")) {
+                        try {
+                            cell.setCellValue(Double.parseDouble(value));
+                        } catch (NumberFormatException e) {
+                            cell.setCellValue(value);
+                        }
+                    } else {
+                        cell.setCellValue(value);
+                    }
+                    writeCount++;
                 }
+            }
+
+            // 样式和数字格式（统一通过新建 CellStyle 应用，避免修改默认样式）
+            boolean hasNumberFormat = cellNode.has("numberFormat") && !cellNode.get("numberFormat").isNull();
+            boolean hasStyle = cellNode.has("style") && !cellNode.get("style").isNull();
+            if (hasNumberFormat || hasStyle) {
+                CellStyle newStyle = wb.createCellStyle();
+                // 复制默认样式的 dataFormat
+                newStyle.setDataFormat(cell.getCellStyle().getDataFormat());
+
+                if (hasNumberFormat) {
+                    String nf = cellNode.get("numberFormat").asText();
+                    short fmtIdx = wb.createDataFormat().getFormat(nf);
+                    newStyle.setDataFormat(fmtIdx);
+                }
+                if (hasStyle) {
+                    JsonNode styleNode = cellNode.get("style");
+                    applyStyleToCellStyle(wb, newStyle, resolveStyle(styleNode, presets));
+                }
+                cell.setCellStyle(newStyle);
+            }
+
+            // 合并单元格
+            int rs = cellNode.has("rowspan") ? cellNode.get("rowspan").asInt() : 1;
+            int cs = cellNode.has("colspan") ? cellNode.get("colspan").asInt() : 1;
+            if (rs > 1 || cs > 1) {
+                sheet.addMergedRegion(new CellRangeAddress(rowIdx, rowIdx + rs - 1, colIdx, colIdx + cs - 1));
+                mergeCount++;
             }
         }
 
         // 自动列宽
-        for (int c = 0; c < data[0].length; c++) {
+        for (int c = 0; c <= maxDataCol; c++) {
             sheet.autoSizeColumn(startCol + c);
             int width = sheet.getColumnWidth(startCol + c);
+            if (width < 2048) sheet.setColumnWidth(startCol + c, 2048);
             if (width > 15000) sheet.setColumnWidth(startCol + c, 15000);
         }
 
-        String endCell = colIndexToLetter(startCol + data[0].length - 1) + (startRow + data.length);
-        String result = String.format("已写入 %d 行 × %d 列到 %s!%s:%s",
-                data.length, data[0].length, sheetName, rangeStart, endCell);
-        if (mergeCount > 0) result += "，含 " + mergeCount + " 处合并单元格";
-        result += "\n";
-        return result;
+        String endCell = colIndexToLetter(startCol + maxDataCol) + (startRow + cells.size());
+        StringBuilder result = new StringBuilder();
+        result.append(String.format("已写入 %d 个单元格", writeCount + formulaCount));
+        if (writeCount > 0) result.append(String.format("（%d 个值", writeCount));
+        if (formulaCount > 0) {
+            result.append(writeCount > 0 ? "、" : "（");
+            result.append(String.format("%d 个公式", formulaCount));
+        }
+        if (writeCount > 0 || formulaCount > 0) result.append("）");
+        result.append(String.format(" 到 %s!%s:%s", sheetName, rangeStart, endCell));
+        if (mergeCount > 0) result.append("，含 ").append(mergeCount).append(" 处合并单元格");
+        result.append("\n");
+        return result.toString();
     }
 
-    // ============ Formula ============
+    private static String stripFormulaPrefix(String formula) {
+        return formula.startsWith("=") ? formula.substring(1) : formula;
+    }
 
-    private String executeFormula(Workbook wb, JsonNode op) {
-        String sheetName = op.has("sheet") ? op.get("sheet").asText() : wb.getSheetName(0);
-        String rangeStr = op.get("range").asText();
-        String formula = op.get("formula").asText();
+    private JsonNode resolveStyle(JsonNode styleNode, java.util.Map<String, JsonNode> presets) {
+        if (styleNode.isTextual()) {
+            String key = styleNode.asText();
+            if (presets.containsKey(key)) return presets.get(key);
+        }
+        return styleNode;
+    }
 
-        Sheet sheet = wb.getSheet(sheetName);
-        if (sheet == null) throw new IllegalArgumentException(
-                "Sheet \"" + sheetName + "\" 不存在。可用Sheet: " + getSheetNames(wb));
+    private void applyStyleToCellStyle(Workbook wb, CellStyle cellStyle, JsonNode styleNode) {
+        if (styleNode == null || !styleNode.isObject()) return;
 
-        int row = parseRow(rangeStr);
-        int col = parseCol(rangeStr);
+        Font font = wb.createFont();
+        boolean hasFont = false;
 
-        Row hRow = sheet.getRow(row);
-        if (hRow == null) hRow = sheet.createRow(row);
-        Cell cell = hRow.getCell(col);
-        if (cell == null) cell = hRow.createCell(col);
-
-        cell.setCellFormula(formula);
-
-        // 即时求值
-        String evalResult = "N/A";
-        try {
-            FormulaEvaluator evaluator = wb.getCreationHelper().createFormulaEvaluator();
-            CellValue cv = evaluator.evaluate(cell);
-            evalResult = formatCellValue(cv);
-        } catch (Exception e) {
-            evalResult = "(求值失败: " + e.getMessage() + ")";
+        if (styleNode.has("bold") && styleNode.get("bold").asBoolean()) {
+            font.setBold(true);
+            hasFont = true;
+        }
+        if (styleNode.has("italic") && styleNode.get("italic").asBoolean()) {
+            font.setItalic(true);
+            hasFont = true;
+        }
+        if (styleNode.has("fontSize") && !styleNode.get("fontSize").isNull()) {
+            font.setFontHeightInPoints((short) styleNode.get("fontSize").asInt());
+            hasFont = true;
+        }
+        if (styleNode.has("fontColor") && !styleNode.get("fontColor").isNull()) {
+            String color = styleNode.get("fontColor").asText();
+            if (wb instanceof XSSFWorkbook) {
+                ((XSSFFont) font).setColor(parseHexColor(color));
+            } else {
+                font.setColor(IndexedColors.BLACK.getIndex());
+            }
+            hasFont = true;
         }
 
-        return String.format("公式已写入: `%s` → %s  位置: %s!%s\n",
-                formula, evalResult, sheetName, rangeStr);
+        if (hasFont) cellStyle.setFont(font);
+
+        if (styleNode.has("bgColor") && !styleNode.get("bgColor").isNull()) {
+            String color = styleNode.get("bgColor").asText();
+            if (wb instanceof XSSFWorkbook && cellStyle instanceof XSSFCellStyle xcs) {
+                xcs.setFillForegroundColor(parseHexColor(color));
+            } else {
+                cellStyle.setFillForegroundColor(IndexedColors.GREY_25_PERCENT.getIndex());
+            }
+            cellStyle.setFillPattern(FillPatternType.SOLID_FOREGROUND);
+        }
+
+        if (styleNode.has("alignment") && !styleNode.get("alignment").isNull()) {
+            String align = styleNode.get("alignment").asText();
+            switch (align) {
+                case "center" -> cellStyle.setAlignment(HorizontalAlignment.CENTER);
+                case "left"   -> cellStyle.setAlignment(HorizontalAlignment.LEFT);
+                case "right"  -> cellStyle.setAlignment(HorizontalAlignment.RIGHT);
+            }
+        }
+    }
+
+    private static XSSFColor parseHexColor(String hex) {
+        String h = hex.startsWith("#") ? hex.substring(1) : hex;
+        int rgb = Integer.parseInt(h, 16);
+        byte r = (byte) ((rgb >> 16) & 0xFF);
+        byte g = (byte) ((rgb >> 8) & 0xFF);
+        byte b = (byte) (rgb & 0xFF);
+        return new XSSFColor(new byte[]{r, g, b}, null);
     }
 
     // ============ Chart ============
@@ -378,52 +471,6 @@ public class ExcelOperationExecutor {
         return colIndexToLetter(col) + (row + 1);
     }
 
-    // ============ Markdown 表格解析（package-private 供测试） ============
-
-    static String[][] parseMarkdownTable(String md) {
-        String[] lines = md.strip().split("\n");
-        List<String> nonEmpty = Arrays.stream(lines)
-                .map(String::strip)
-                .filter(l -> !l.isEmpty() && l.contains("|"))
-                .collect(Collectors.toList());
-        if (nonEmpty.isEmpty()) return new String[0][0];
-
-        int headerIdx = 0;
-        int dataStart = 1;
-        // 查找分隔行位置
-        for (int i = 1; i < nonEmpty.size(); i++) {
-            if (nonEmpty.get(i).replaceAll("[|\\-:\\s]", "").isEmpty()) {
-                dataStart = i + 1;
-                break;
-            }
-        }
-
-        List<String[]> result = new ArrayList<>();
-        // 表头
-        result.add(splitRow(nonEmpty.get(headerIdx)));
-        int colCount = result.get(0).length;
-        // 数据行
-        for (int i = dataStart; i < nonEmpty.size(); i++) {
-            String[] cells = splitRow(nonEmpty.get(i));
-            // 补齐或截断列数
-            String[] padded = new String[colCount];
-            for (int j = 0; j < colCount; j++) {
-                padded[j] = j < cells.length ? cells[j] : "";
-            }
-            result.add(padded);
-        }
-        return result.toArray(new String[0][]);
-    }
-
-    private static String[] splitRow(String row) {
-        String trimmed = row.strip();
-        if (trimmed.startsWith("|")) trimmed = trimmed.substring(1);
-        if (trimmed.endsWith("|")) trimmed = trimmed.substring(0, trimmed.length() - 1);
-        return Arrays.stream(trimmed.split("\\|", -1))
-                .map(String::strip)
-                .toArray(String[]::new);
-    }
-
     // ============ 单元格值提取 ============
 
     static String getCellValue(Cell cell, List<CellRangeAddress> merges, int row, int col) {
@@ -470,34 +517,6 @@ public class ExcelOperationExecutor {
             }
             default -> "";
         };
-    }
-
-    // ============ 样式 ============
-
-    private CellStyle createHeaderStyle(Workbook wb) {
-        Font font = wb.createFont();
-        font.setBold(true);
-        font.setFontHeightInPoints((short) 11);
-
-        CellStyle style = wb.createCellStyle();
-        style.setFont(font);
-        style.setFillForegroundColor(IndexedColors.GREY_25_PERCENT.getIndex());
-        style.setFillPattern(FillPatternType.SOLID_FOREGROUND);
-        setThinBorders(style);
-        return style;
-    }
-
-    private CellStyle createDataStyle(Workbook wb) {
-        CellStyle style = wb.createCellStyle();
-        setThinBorders(style);
-        return style;
-    }
-
-    private void setThinBorders(CellStyle style) {
-        style.setBorderBottom(BorderStyle.THIN);
-        style.setBorderTop(BorderStyle.THIN);
-        style.setBorderLeft(BorderStyle.THIN);
-        style.setBorderRight(BorderStyle.THIN);
     }
 
     // ============ 辅助 ============

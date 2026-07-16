@@ -67,53 +67,6 @@ class ExcelOperationExecutorTest {
     }
 
     @Nested
-    @DisplayName("Markdown 表格解析")
-    class MarkdownParsingTests {
-
-        @Test
-        @DisplayName("标准表格: 表头+分隔行+数据行")
-        void standardTable() {
-            String md = """
-                    | 姓名 | 年龄 | 城市 |
-                    | --- | --- | --- |
-                    | 张三 | 25 | 北京 |
-                    | 李四 | 30 | 上海 |""";
-
-            String[][] data = ExcelOperationExecutor.parseMarkdownTable(md);
-            assertEquals(3, data.length);
-            assertArrayEquals(new String[]{"姓名", "年龄", "城市"}, data[0]);
-            assertArrayEquals(new String[]{"张三", "25", "北京"}, data[1]);
-            assertArrayEquals(new String[]{"李四", "30", "上海"}, data[2]);
-        }
-
-        @Test
-        @DisplayName("无分隔行: 表头按数据行处理")
-        void noSeparator() {
-            String md = """
-                    | A | B |
-                    | 1 | 2 |""";
-
-            String[][] data = ExcelOperationExecutor.parseMarkdownTable(md);
-            assertEquals(2, data.length);
-        }
-
-        @Test
-        @DisplayName("单列表格")
-        void singleColumn() {
-            String md = """
-                    | 名称 |
-                    | --- |
-                    | A |
-                    | B |""";
-
-            String[][] data = ExcelOperationExecutor.parseMarkdownTable(md);
-            assertEquals(3, data.length);
-            assertEquals(1, data[0].length);
-            assertEquals("名称", data[0][0]);
-        }
-    }
-
-    @Nested
     @DisplayName("Read 操作")
     class ReadTests {
 
@@ -166,7 +119,7 @@ class ExcelOperationExecutorTest {
     }
 
     @Nested
-    @DisplayName("Write 操作")
+    @DisplayName("Write 操作（cells 数组格式）")
     class WriteTests {
 
         private XSSFWorkbook wb;
@@ -177,24 +130,28 @@ class ExcelOperationExecutorTest {
         }
 
         @Test
-        @DisplayName("写入 Markdown 表格数据到 Excel")
-        void writeData() throws Exception {
+        @DisplayName("cells 数组基本写入，数值列用 type:number")
+        void writeCells() throws Exception {
             ObjectNode op = MAPPER.createObjectNode();
             op.put("type", "write");
             op.put("sheet", "Sheet1");
             op.put("range", "A1");
-            op.put("data", "| 名称 | 数量 |\n| --- | --- |\n| 苹果 | 10 |\n| 香蕉 | 20 |");
+            ArrayNode cells = op.putArray("cells");
+            cells.addObject().put("row", 0).put("col", 0).put("value", "产品");
+            cells.addObject().put("row", 0).put("col", 1).put("value", "销量");
+            cells.addObject().put("row", 1).put("col", 0).put("value", "苹果");
+            cells.addObject().put("row", 1).put("col", 1).put("value", "100").put("type", "number");
 
             String result = executor.execute(wb, op);
-            assertTrue(result.contains("已写入 3 行"));
-            assertTrue(result.contains("Sheet1!A1"));
+            assertTrue(result.contains("4 个单元格"));
 
-            // 验证写入结果
             Sheet sheet = wb.getSheet("Sheet1");
             assertNotNull(sheet);
-            assertEquals("名称", sheet.getRow(0).getCell(0).getStringCellValue());
-            assertEquals("苹果", sheet.getRow(1).getCell(0).getStringCellValue());
-            assertEquals(20.0, Double.parseDouble(sheet.getRow(2).getCell(1).getStringCellValue()));
+            assertEquals("产品", sheet.getRow(0).getCell(0).getStringCellValue());
+            // type=number 应存储为 NUMERIC
+            Cell numCell = sheet.getRow(1).getCell(1);
+            assertEquals(CellType.NUMERIC, numCell.getCellType());
+            assertEquals(100.0, numCell.getNumericCellValue(), 0.001);
         }
 
         @Test
@@ -206,56 +163,180 @@ class ExcelOperationExecutorTest {
             op.put("type", "write");
             op.put("sheet", "新Sheet");
             op.put("range", "A1");
-            op.put("data", "| x |\n| --- |\n| 1 |");
+            ArrayNode cells = op.putArray("cells");
+            cells.addObject().put("row", 0).put("col", 0).put("value", "x");
 
             executor.execute(wb, op);
             assertNotNull(wb.getSheet("新Sheet"));
         }
-    }
 
-    @Nested
-    @DisplayName("Formula 操作")
-    class FormulaTests {
-
-        private XSSFWorkbook wb;
-
-        @BeforeEach
-        void setUp() {
-            wb = new XSSFWorkbook();
+        @Test
+        @DisplayName("formula 字段写入公式并求值")
+        void writeFormula() throws Exception {
+            // 先写入数据
             Sheet sheet = wb.createSheet("Sheet1");
-            Row row1 = sheet.createRow(0);  // A1=10, B1=20
-            row1.createCell(0).setCellValue(10);
-            row1.createCell(1).setCellValue(20);
-            Row row2 = sheet.createRow(1);  // A2=30, B2=40
-            row2.createCell(0).setCellValue(30);
-            row2.createCell(1).setCellValue(40);
+            Row r0 = sheet.createRow(0);
+            r0.createCell(0).setCellValue(10);
+            r0.createCell(1).setCellValue(20);
+
+            ObjectNode op = MAPPER.createObjectNode();
+            op.put("type", "write");
+            op.put("sheet", "Sheet1");
+            op.put("range", "A2");
+            ArrayNode cells = op.putArray("cells");
+            cells.addObject().put("row", 0).put("col", 0).put("formula", "SUM(A1:B1)");
+
+            String result = executor.execute(wb, op);
+            assertTrue(result.contains("1 个公式"));
         }
 
         @Test
-        @DisplayName("SUM 公式写入并求值")
-        void sumFormula() throws Exception {
+        @DisplayName("value 以 = 开头自动识别为公式")
+        void valueWithEqualsSign() throws Exception {
+            Sheet sheet = wb.createSheet("Sheet1");
+            Row r0 = sheet.createRow(0);
+            r0.createCell(0).setCellValue(10);
+            r0.createCell(1).setCellValue(20);
+
             ObjectNode op = MAPPER.createObjectNode();
-            op.put("type", "formula");
+            op.put("type", "write");
             op.put("sheet", "Sheet1");
-            op.put("range", "A3");
-            op.put("formula", "SUM(A1:A2)");
+            op.put("range", "A2");
+            ArrayNode cells = op.putArray("cells");
+            cells.addObject().put("row", 0).put("col", 0).put("value", "=SUM(A1:B1)");
 
             String result = executor.execute(wb, op);
-            assertTrue(result.contains("SUM(A1:A2)"));
-            assertTrue(result.contains("40"));
+            assertTrue(result.contains("1 个公式"));
+            // 验证确实是公式而非纯文本
+            Cell cell = sheet.getRow(1).getCell(0);
+            assertEquals(CellType.FORMULA, cell.getCellType());
         }
 
         @Test
-        @DisplayName("AVERAGE 公式写入并求值")
-        void averageFormula() throws Exception {
+        @DisplayName("stylePresets 预设引用")
+        void stylePresets() throws Exception {
             ObjectNode op = MAPPER.createObjectNode();
-            op.put("type", "formula");
+            op.put("type", "write");
             op.put("sheet", "Sheet1");
-            op.put("range", "C1");
-            op.put("formula", "AVERAGE(A1:B2)");
+            op.put("range", "A1");
+            ObjectNode sp = op.putObject("stylePresets");
+            ObjectNode hStyle = sp.putObject("h");
+            hStyle.put("bold", true);
+            hStyle.put("fontSize", 14);
+            ArrayNode cells = op.putArray("cells");
+            cells.addObject().put("row", 0).put("col", 0).put("value", "标题").put("style", "h");
 
             String result = executor.execute(wb, op);
-            assertTrue(result.contains("25"));
+            assertTrue(result.contains("1 个单元格"));
+
+            Cell cell = wb.getSheet("Sheet1").getRow(0).getCell(0);
+            assertTrue(wb.getFontAt(cell.getCellStyle().getFontIndex()).getBold());
+        }
+
+        @Test
+        @DisplayName("内联 style 对象")
+        void inlineStyle() throws Exception {
+            ObjectNode op = MAPPER.createObjectNode();
+            op.put("type", "write");
+            op.put("sheet", "Sheet1");
+            op.put("range", "A1");
+            ArrayNode cells = op.putArray("cells");
+            ObjectNode cellObj = cells.addObject();
+            cellObj.put("row", 0);
+            cellObj.put("col", 0);
+            cellObj.put("value", "数据");
+            ObjectNode inlineStyle = cellObj.putObject("style");
+            inlineStyle.put("bold", true);
+            inlineStyle.put("alignment", "center");
+
+            String result = executor.execute(wb, op);
+            assertTrue(result.contains("1 个单元格"));
+
+            Cell cell = wb.getSheet("Sheet1").getRow(0).getCell(0);
+            assertTrue(wb.getFontAt(cell.getCellStyle().getFontIndex()).getBold());
+            assertEquals(HorizontalAlignment.CENTER, cell.getCellStyle().getAlignment());
+        }
+
+        @Test
+        @DisplayName("rowspan/colspan 合并单元格")
+        void mergeCells() throws Exception {
+            ObjectNode op = MAPPER.createObjectNode();
+            op.put("type", "write");
+            op.put("sheet", "Sheet1");
+            op.put("range", "A1");
+            ArrayNode cells = op.putArray("cells");
+            cells.addObject().put("row", 0).put("col", 0).put("value", "大标题").put("rowspan", 1).put("colspan", 2);
+
+            String result = executor.execute(wb, op);
+            assertTrue(result.contains("1 处合并单元格"));
+
+            Sheet sheet = wb.getSheet("Sheet1");
+            assertEquals(1, sheet.getNumMergedRegions());
+        }
+
+        @Test
+        @DisplayName("numberFormat 配合 type:number 正确存储为数值")
+        void numberFormat() throws Exception {
+            ObjectNode op = MAPPER.createObjectNode();
+            op.put("type", "write");
+            op.put("sheet", "Sheet1");
+            op.put("range", "A1");
+            ArrayNode cells = op.putArray("cells");
+            cells.addObject().put("row", 0).put("col", 0).put("value", "1000.5")
+                    .put("type", "number").put("numberFormat", "#,##0.00");
+
+            executor.execute(wb, op);
+
+            Cell cell = wb.getSheet("Sheet1").getRow(0).getCell(0);
+            assertEquals(CellType.NUMERIC, cell.getCellType());
+            assertEquals(1000.5, cell.getNumericCellValue(), 0.001);
+            String format = cell.getCellStyle().getDataFormatString();
+            assertEquals("#,##0.00", format);
+        }
+
+        @Test
+        @DisplayName("无 type 字段时默认为 text")
+        void defaultTypeText() throws Exception {
+            ObjectNode op = MAPPER.createObjectNode();
+            op.put("type", "write");
+            op.put("sheet", "Sheet1");
+            op.put("range", "A1");
+            ArrayNode cells = op.putArray("cells");
+            cells.addObject().put("row", 0).put("col", 0).put("value", "12345");
+
+            executor.execute(wb, op);
+
+            Cell cell = wb.getSheet("Sheet1").getRow(0).getCell(0);
+            assertEquals(CellType.STRING, cell.getCellType());
+            assertEquals("12345", cell.getStringCellValue());
+        }
+
+        @Test
+        @DisplayName("type:number 值非数字时兜底存为文本")
+        void numberTypeFallback() throws Exception {
+            ObjectNode op = MAPPER.createObjectNode();
+            op.put("type", "write");
+            op.put("sheet", "Sheet1");
+            op.put("range", "A1");
+            ArrayNode cells = op.putArray("cells");
+            cells.addObject().put("row", 0).put("col", 0).put("value", "N/A").put("type", "number");
+
+            executor.execute(wb, op);
+
+            Cell cell = wb.getSheet("Sheet1").getRow(0).getCell(0);
+            assertEquals(CellType.STRING, cell.getCellType());
+        }
+
+        @Test
+        @DisplayName("cells 数组为空时抛异常")
+        void emptyCells() {
+            ObjectNode op = MAPPER.createObjectNode();
+            op.put("type", "write");
+            op.put("sheet", "Sheet1");
+            op.put("range", "A1");
+            op.putArray("cells");
+
+            assertThrows(IllegalArgumentException.class, () -> executor.execute(wb, op));
         }
     }
 
@@ -352,7 +433,7 @@ class ExcelOperationExecutorTest {
             XSSFWorkbook wb = new XSSFWorkbook();
 
             Exception e = assertThrows(IllegalArgumentException.class, () -> executor.execute(wb, op));
-            assertTrue(e.getMessage().contains("未知操作类型"));
+            assertTrue(e.getMessage().contains("read, write, chart"));
         }
     }
 }
