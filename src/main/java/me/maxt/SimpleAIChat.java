@@ -9,6 +9,7 @@ import me.maxt.api.DeltaEvent;
 import me.maxt.api.DeltaHandler;
 import me.maxt.config.AppConfig;
 import me.maxt.model.Message;
+import me.maxt.model.TokenUsageStats;
 import me.maxt.model.ToolCall;
 import me.maxt.tool.ShellTool;
 import me.maxt.tool.Tool;
@@ -72,6 +73,7 @@ public class SimpleAIChat {
         System.out.println("  输入 '对话历史' 或 'history' 查看历史对话");
         System.out.println("  输入 '清空历史' 或 'clear' 清除历史对话");
         System.out.println("  输入 'debug' 查看调试信息");
+        System.out.println("  输入 'tokens' 查看 Token 用量统计");
         System.out.println("=================================\n");
 
         AppConfig config = AppConfig.load();
@@ -113,6 +115,10 @@ public class SimpleAIChat {
                     System.out.println(chat.apiClient.getRawResponses());
                     continue;
                 }
+                if ("tokens".equals(userInput)) {
+                    System.out.println(TokenUsageStats.summary());
+                    continue;
+                }
 
                 if (config.isStream()) {
                     chat.streamChat(userInput);
@@ -129,6 +135,7 @@ public class SimpleAIChat {
     // ============ 非流式对话 ============
 
     void commonResponse(String userInput) throws Exception {
+        TokenUsageStats.clearSession();
         messages.add(new Message("user", userInput));
 
         while (true) {
@@ -155,6 +162,7 @@ public class SimpleAIChat {
                 System.out.println("---");
             }
             System.out.println("AI: " + (assistantMsg.getContent() != null ? assistantMsg.getContent() : ""));
+            TokenUsageStats.accumulateTotal();
             break;
         }
     }
@@ -193,6 +201,7 @@ public class SimpleAIChat {
     // ============ 流式对话 ============
 
     void streamChat(String userMessage) throws Exception {
+        TokenUsageStats.clearSession();
         messages.add(new Message("user", userMessage));
 
         StringBuilder contentBuilder = new StringBuilder();
@@ -231,6 +240,7 @@ public class SimpleAIChat {
             Message result = apiClient.chatStream(messages, handler);
             System.out.println();
             messages.add(result);
+            TokenUsageStats.accumulateTotal();
         } catch (ApiException e) {
             System.out.println();
             System.out.println("API错误 (状态码: " + e.getStatusCode() + "): "

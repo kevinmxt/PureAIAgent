@@ -7,6 +7,8 @@ import com.fasterxml.jackson.databind.node.ArrayNode;
 import com.fasterxml.jackson.databind.node.ObjectNode;
 import me.maxt.config.AppConfig;
 import me.maxt.model.Message;
+import me.maxt.model.TokenUsage;
+import me.maxt.model.TokenUsageStats;
 import me.maxt.model.ToolCall;
 import me.maxt.tool.Tool;
 
@@ -218,6 +220,10 @@ public class DeepSeekApiClient implements ChatApiClient {
                     new TypeReference<List<ToolCall>>() {});
         }
 
+        if (root.has("usage")) {
+            TokenUsageStats.accumulateSession(parseUsage(root.get("usage")));
+        }
+
         return new Message("assistant", content, reasoningContent, toolCalls, null);
     }
 
@@ -232,7 +238,29 @@ public class DeepSeekApiClient implements ChatApiClient {
         String reasoning = delta.has("reasoning_content") && !delta.get("reasoning_content").isNull()
                 ? delta.get("reasoning_content").asText() : null;
 
+        if (chunk.has("usage")) {
+            TokenUsageStats.accumulateSession(parseUsage(chunk.get("usage")));
+        }
+
         return new DeltaEvent(content, reasoning);
+    }
+
+    static TokenUsage parseUsage(JsonNode usage) {
+        TokenUsage tu = new TokenUsage();
+        tu.setPromptTokens(usage.get("prompt_tokens").asInt());
+        tu.setCompletionTokens(usage.get("completion_tokens").asInt());
+        tu.setTotalTokens(usage.get("total_tokens").asInt());
+
+        if (usage.has("prompt_cache_hit_tokens")) {
+            tu.setPromptCacheHitTokens(usage.get("prompt_cache_hit_tokens").asInt());
+        }
+        if (usage.has("prompt_cache_miss_tokens")) {
+            tu.setPromptCacheMissTokens(usage.get("prompt_cache_miss_tokens").asInt());
+        }
+        if (usage.has("completion_tokens_details") && usage.get("completion_tokens_details").has("reasoning_tokens")) {
+            tu.setReasoningTokens(usage.get("completion_tokens_details").get("reasoning_tokens").asInt());
+        }
+        return tu;
     }
 
     public static String parseError(String responseBody) {
