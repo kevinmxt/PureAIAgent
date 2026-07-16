@@ -26,3 +26,4 @@
 | `退出` / `exit` | 结束程序 |
 | `对话历史` / `history` | 打印 `MESSAGES` 列表 |
 | `debug` | 打印 `RESPONSES` 原始响应 |
+| `tokens` | 打印 Token 用量统计（本次会话 + 历史累计） |

@@ -12,6 +12,7 @@ import me.maxt.tool.Tool;
 import org.apache.poi.ss.usermodel.Workbook;
 import org.apache.poi.xssf.usermodel.XSSFWorkbook;
 
+import java.io.ByteArrayOutputStream;
 import java.io.FileOutputStream;
 import java.io.IOException;
 import java.nio.file.Files;
@@ -123,35 +124,41 @@ public class ExcelTool implements Tool {
 
         // 打开工作簿（仅一次） → 执行操作 → 按需保存
         Workbook workbook = openWorkbook(filePath);
-        try {
-            StringBuilder result = new StringBuilder();
-            result.append("## Excel 操作结果\n\n**文件**: ").append(filePath.toAbsolutePath()).append("\n\n");
 
-            boolean hasModifications = false;
-            for (int i = 0; i < operations.size(); i++) {
-                JsonNode op = operations.get(i);
-                String opType = op.has("type") ? op.get("type").asText() : "未知";
-                if ("write".equals(opType) || "formula".equals(opType) || "chart".equals(opType)) {
-                    hasModifications = true;
-                }
-                try {
-                    String opResult = executor.execute(workbook, op);
-                    result.append("### 操作 ").append(i + 1).append(": ").append(opType).append("\n");
-                    result.append(opResult).append("\n");
-                } catch (Exception e) {
-                    result.append("### 操作 ").append(i + 1).append(" 失败 (").append(opType).append(")\n");
-                    result.append("错误: ").append(e.getMessage()).append("\n\n");
-                }
-            }
+        StringBuilder result = new StringBuilder();
+        result.append("## Excel 操作结果\n\n**文件**: ").append(filePath.toAbsolutePath()).append("\n\n");
 
-            if (hasModifications) {
-                saveWorkbook(workbook, filePath);
-                result.append("> 文件已保存: ").append(filePath.toAbsolutePath()).append("\n");
+        boolean hasModifications = false;
+        for (int i = 0; i < operations.size(); i++) {
+            JsonNode op = operations.get(i);
+            String opType = op.has("type") ? op.get("type").asText() : "未知";
+            if ("write".equals(opType) || "formula".equals(opType) || "chart".equals(opType)) {
+                hasModifications = true;
             }
-            return result.toString();
-        } finally {
-            try { workbook.close(); } catch (IOException ignored) {}
+            try {
+                String opResult = executor.execute(workbook, op);
+                result.append("### 操作 ").append(i + 1).append(": ").append(opType).append("\n");
+                result.append(opResult).append("\n");
+            } catch (Exception e) {
+                result.append("### 操作 ").append(i + 1).append(" 失败 (").append(opType).append(")\n");
+                result.append("错误: ").append(e.getMessage()).append("\n\n");
+            }
         }
+
+        if (hasModifications) {
+            // 先写到内存，再关闭 workbook（close 会触发 POI 内部 re-save，避免覆盖已写入文件）
+            ByteArrayOutputStream bos = new ByteArrayOutputStream();
+            workbook.write(bos);
+            workbook.close();
+            Files.createDirectories(filePath.getParent());
+            try (FileOutputStream fos = new FileOutputStream(filePath.toFile())) {
+                bos.writeTo(fos);
+            }
+            result.append("> 文件已保存: ").append(filePath.toAbsolutePath()).append("\n");
+        } else {
+            workbook.close();
+        }
+        return result.toString();
     }
 
     // ============ 文件路径处理 ============
@@ -272,10 +279,4 @@ public class ExcelTool implements Tool {
         return new XSSFWorkbook();
     }
 
-    private void saveWorkbook(Workbook workbook, Path filePath) throws IOException {
-        Files.createDirectories(filePath.getParent());
-        try (FileOutputStream fos = new FileOutputStream(filePath.toFile())) {
-            workbook.write(fos);
-        }
-    }
 }

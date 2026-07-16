@@ -15,7 +15,9 @@ src/main/java/me/maxt/
 │   └── DeltaHandler.java          ← 流式回调函数式接口
 ├── model/
 │   ├── Message.java               ← 消息模型
-│   └── ToolCall.java              ← 工具调用模型
+│   ├── ToolCall.java              ← 工具调用模型
+│   ├── TokenUsage.java            ← 单次用量数据
+│   └── TokenUsageStats.java       ← 用量统计（会话+总量累加）
 └── tool/
     ├── Tool.java                  ← 工具接口 (扩展点)
     ├── ShellTool.java             ← Shell 命令执行工具
@@ -43,7 +45,8 @@ src/test/java/me/maxt/
 │   - 用户输入循环 (main)                                     │
 │   - 工具调用循环 (commonResponse)                           │
 │   - 流式输出格式化 (streamChat)                             │
-│   - 工具执行分发 (executeTool)                              │
+│   - 工具调用确认 (callTool) → 分发执行 (executeTool)          │
+│   - 特殊命令: 退出/history/debug/tokens                     │
 │                                                            │
 │ 不包含: 请求体构建、JSON解析、SSE解析                        │
 ├────────────────────────────────────────────────────────────┤
@@ -56,7 +59,7 @@ src/test/java/me/maxt/
 │   ┌──────────────────────────────────────────────┐         │
 │   │ 1. user msg → apiClient.chat(msgs, tools)    │         │
 │   │ 2. 返回 Message → 检查 toolCalls              │         │
-│   │ 3. 有工具调用 → executeTool() → tool msg      │         │
+│   │ 3. 有工具调用 → callTool() → executeTool()              │         │
 │   │    → 回到步骤1 (循环)                          │         │
 │   │ 4. 无工具调用 → 输出思考+回答 → 结束          │         │
 │   └──────────────────────────────────────────────┘         │
@@ -68,6 +71,7 @@ src/test/java/me/maxt/
 │   │ 3. 返回完整 Message → 记录到 messages         │         │
 │   └──────────────────────────────────────────────┘         │
 ├────────────────────────────────────────────────────────────┤
+│ ◆ callTool(ToolCall) → 用户确认(1/2/3) → executeTool        │
 │ ◆ executeTool(ToolCall) → 工具分发                          │
 └────────────────────────────────────────────────────────────┘
 
@@ -94,6 +98,7 @@ src/test/java/me/maxt/
     ├───────────────────────┤
     │ buildRequestBody()    │  (private)
     │ parseAssistantMessage()│  (package-private, 供测试)
+    │ parseUsage()          │  (package-private static)
     │ parseDelta()          │  (package-private, 供测试)
     │ parseError()          │  (public static)
     └───────────────────────┘
@@ -152,7 +157,10 @@ SimpleAIChat.main()
   │        ┌──────┴──────┐
   │        │ has toolCalls?
   │        ▼              ▼
-  │    executeTool()   输出思考+回答
+  │    callTool()   (用户确认)
+  │        │
+  │        ▼
+  │    executeTool()
   │        │
   │        ▼
   │    Message (tool) → 回到 commonResponse 循环
@@ -194,6 +202,7 @@ SimpleAIChat.main()
 - **NL→JSON 翻译**: 子模型将自然语言指令翻译为 JSON 操作序列（四种类型: read/write/formula/chart），ExcelOperationExecutor 逐条执行
 - **文件安全**: 默认仅允许操作 `excel.work.dir` 目录下的文件，可在配置中关闭限制
 - **关键约束**: 同一个文件只能被 `new XSSFWorkbook()` 打开一次，`buildFileContext` 不再单独打开文件
+- **POI 双写陷阱**: `XSSFWorkbook.write(OutputStream)` 后调用 `close()` 会触发 `OPCPackage.saveImpl()` 内部重新保存到原始文件，覆盖已写入内容并抛出 `EOFException: Unexpected end of ZLIB input stream`。正确做法: write 到 `ByteArrayOutputStream` → close workbook → 写字节到文件
 
 ### 切换模型/API
 - **同协议模型（OpenAI 兼容）**: 修改 `config.properties` 中的 `api.url` 和 `model.name`，无需重新打包
