@@ -24,6 +24,7 @@ import java.util.Set;
 
 import org.jline.reader.LineReader;
 import org.jline.reader.LineReaderBuilder;
+import org.jline.terminal.Attributes;
 import org.jline.terminal.Terminal;
 import org.jline.terminal.TerminalBuilder;
 
@@ -42,6 +43,8 @@ public class SimpleAIChat {
      * 允许的工具调用集合
      */
     private final Set<String> allowedToolActions = new HashSet<>();
+    private Terminal terminal;
+    private LineReader reader;
 
     public SimpleAIChat(ChatApiClient apiClient) {
         this.apiClient = apiClient;
@@ -62,6 +65,11 @@ public class SimpleAIChat {
 
     public List<Message> getMessages() {
         return messages;
+    }
+
+    public void setTerminal(Terminal terminal, LineReader reader) {
+        this.terminal = terminal;
+        this.reader = reader;
     }
 
     // ============ 主程序 ============
@@ -87,6 +95,7 @@ public class SimpleAIChat {
             LineReader reader = LineReaderBuilder.builder()
                     .terminal(terminal)
                     .build();
+            chat.setTerminal(terminal, reader);
 
             while (true) {
                 String userInput = reader.readLine("\n你: ");
@@ -173,13 +182,23 @@ public class SimpleAIChat {
             System.out.println("1.本次调用允许");
             System.out.println("2.本次会话均允许");
             System.out.println("3.本次调用不允许");
-            Terminal terminal = TerminalBuilder.builder()
-                    .encoding(StandardCharsets.UTF_8)
-                    .build();
-            LineReader reader = LineReaderBuilder.builder()
-                    .terminal(terminal)
-                    .build();
-            String choice = reader.readLine("请选择: ");
+            System.out.print("请选择: ");
+            System.out.flush();
+
+            String choice;
+            if (terminal != null) {
+                Attributes savedAttrs = terminal.enterRawMode();
+                int ch = terminal.reader().read();
+                terminal.setAttributes(savedAttrs);
+                choice = String.valueOf((char) ch);
+                System.out.println(choice);
+            } else if (reader != null) {
+                choice = reader.readLine();
+            } else {
+                // 无终端环境（测试/CI），自动允许本次调用
+                choice = "1";
+            }
+
             switch (choice) {
                 case "1":
                     break;
