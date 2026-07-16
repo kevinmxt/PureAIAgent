@@ -182,18 +182,10 @@ public class SimpleAIChat {
             System.out.println("1.本次调用允许");
             System.out.println("2.本次会话均允许");
             System.out.println("3.本次调用不允许");
-            System.out.print("请选择: ");
-            System.out.flush();
 
             String choice;
-            if (terminal != null) {
-                Attributes savedAttrs = terminal.enterRawMode();
-                int ch = terminal.reader().read();
-                terminal.setAttributes(savedAttrs);
-                choice = String.valueOf((char) ch);
-                System.out.println(choice);
-            } else if (reader != null) {
-                choice = reader.readLine();
+            if (reader != null) {
+                choice = reader.readLine("请选择: ");
             } else {
                 // 无终端环境（测试/CI），自动允许本次调用
                 choice = "1";
@@ -209,7 +201,7 @@ public class SimpleAIChat {
                     System.out.println("本次调用已拒绝");
                     return "拒绝本次调用";
                 default:
-                    System.out.println("无效的选择");
+                    System.out.println("无效的选择:" + choice);
             }
         }
         String result = executeTool(tc);
