@@ -14,9 +14,12 @@ import me.maxt.tool.ShellTool;
 import me.maxt.tool.Tool;
 import me.maxt.tool.excel.ExcelTool;
 
+import java.io.IOException;
 import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
+import java.util.HashSet;
 import java.util.List;
+import java.util.Set;
 
 import org.jline.reader.LineReader;
 import org.jline.reader.LineReaderBuilder;
@@ -34,6 +37,10 @@ public class SimpleAIChat {
     private final ChatApiClient apiClient;
     private final List<Message> messages = new ArrayList<>();
     private final List<Tool> tools;
+    /**
+     * 允许的工具调用集合
+     */
+    private final Set<String> allowedToolActions = new HashSet<>();
 
     public SimpleAIChat(ChatApiClient apiClient) {
         this.apiClient = apiClient;
@@ -137,9 +144,7 @@ public class SimpleAIChat {
 
             if (assistantMsg.getToolCalls() != null && !assistantMsg.getToolCalls().isEmpty()) {
                 for (ToolCall tc : assistantMsg.getToolCalls()) {
-                    System.out.println("[工具调用] " + tc.getFunction().getName());
-                    String result = executeTool(tc);
-                    System.out.println("[工具结果] " + result);
+                    String result = callTool(tc);
                     messages.add(new Message("tool", result, null, null, tc.getId()));
                 }
                 continue;
@@ -152,6 +157,37 @@ public class SimpleAIChat {
             System.out.println("AI: " + (assistantMsg.getContent() != null ? assistantMsg.getContent() : ""));
             break;
         }
+    }
+
+    String callTool(ToolCall tc) throws IOException {
+        System.out.println("[工具调用] " + tc.getFunction().getName() + ": " + tc.getFunction().getArguments());
+        if (!allowedToolActions.contains(tc.getFunction().getArguments())) {
+            System.out.println("1.本次调用允许");
+            System.out.println("2.本次会话均允许");
+            System.out.println("3.本次调用不允许");
+            Terminal terminal = TerminalBuilder.builder()
+                    .encoding(StandardCharsets.UTF_8)
+                    .build();
+            LineReader reader = LineReaderBuilder.builder()
+                    .terminal(terminal)
+                    .build();
+            String choice = reader.readLine("请选择: ");
+            switch (choice) {
+                case "1":
+                    break;
+                case "2":
+                    allowedToolActions.add(tc.getFunction().getArguments());
+                    break;
+                case "3":
+                    System.out.println("本次调用已拒绝");
+                    return "拒绝本次调用";
+                default:
+                    System.out.println("无效的选择");
+            }
+        }
+        String result = executeTool(tc);
+        System.out.println("[工具结果] " + result);
+        return result;
     }
 
     // ============ 流式对话 ============
