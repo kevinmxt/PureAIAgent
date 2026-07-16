@@ -182,6 +182,7 @@ public class SimpleAIChat {
             System.out.println("1.本次调用允许");
             System.out.println("2.本次会话均允许");
             System.out.println("3.本次调用不允许");
+            System.out.println("4.结束本次会话");
 
             String choice;
             if (reader != null) {
@@ -200,6 +201,8 @@ public class SimpleAIChat {
                 case "3":
                     System.out.println("本次调用已拒绝");
                     return "拒绝本次调用";
+                case "4":
+                    return "[停止工具调用,询问用户需求]";
                 default:
                     System.out.println("无效的选择:" + choice);
             }
