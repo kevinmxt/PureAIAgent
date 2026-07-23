@@ -14,9 +14,13 @@ import me.maxt.model.ToolCall;
 import me.maxt.tool.ShellTool;
 import me.maxt.tool.Tool;
 import me.maxt.tool.excel.ExcelTool;
+import me.maxt.skill.Skill;
+import me.maxt.skill.SkillLoader;
+import me.maxt.skill.SkillTool;
 
 import java.io.IOException;
 import java.nio.charset.StandardCharsets;
+import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.HashSet;
 import java.util.List;
@@ -53,7 +57,37 @@ public class SimpleAIChat {
 
     public SimpleAIChat(ChatApiClient apiClient, AppConfig config) {
         this.apiClient = apiClient;
-        this.tools = new ArrayList<>(List.of(new ShellTool(), new ExcelTool(config)));
+        List<Tool> baseTools = new ArrayList<>();
+        baseTools.add(new ShellTool());
+        baseTools.add(new ExcelTool(config));
+
+        // 加载 SKILL
+        SkillLoader loader = new SkillLoader(Path.of(config.getSkillDir()));
+        List<Skill> skills = loader.load();
+
+        // 收集内置工具名
+        Set<String> builtInNames = new HashSet<>();
+        for (Tool t : baseTools) {
+            builtInNames.add(t.name());
+        }
+
+        // 注册技能为工具
+        int registered = 0;
+        for (Skill skill : skills) {
+            if (builtInNames.contains(skill.getName())) {
+                System.out.println("[警告] SKILL '" + skill.getName() + "' 与内置工具重名，已跳过");
+                continue;
+            }
+            baseTools.add(new SkillTool(skill, messages, apiClient, baseTools,
+                    config.getSkillMaxTurns(), config.getSkillContextMessages()));
+            builtInNames.add(skill.getName());
+            registered++;
+        }
+
+        this.tools = baseTools;
+        if (registered > 0) {
+            System.out.println("已加载 " + registered + " 个SKILL");
+        }
     }
 
     SimpleAIChat(ChatApiClient apiClient, List<Tool> tools) {
@@ -82,6 +116,8 @@ public class SimpleAIChat {
         System.out.println("  输入 '清空历史' 或 'clear' 清除历史对话");
         System.out.println("  输入 'debug' 查看调试信息");
         System.out.println("  输入 'tokens' 查看 Token 用量统计");
+        System.out.println("  输入 '/reload-skills' 重新加载 SKILL");
+        System.out.println("  输入 '/skill名' 触发 SKILL（如 /code-review）");
         System.out.println("=================================\n");
 
         AppConfig config = AppConfig.load();
@@ -126,6 +162,10 @@ public class SimpleAIChat {
                 }
                 if ("tokens".equals(userInput)) {
                     System.out.println(TokenUsageStats.summary());
+                    continue;
+                }
+                if ("/reload-skills".equals(userInput)) {
+                    chat.reloadSkills(config);
                     continue;
                 }
 
@@ -263,6 +303,39 @@ public class SimpleAIChat {
     }
 
     // ============ 工具执行 ============
+
+    void reloadSkills(AppConfig config) {
+        // 移除已有的 SkillTool（保留 ShellTool 和 ExcelTool）
+        List<Tool> baseTools = new ArrayList<>();
+        Set<String> builtInNames = new HashSet<>();
+        for (Tool t : tools) {
+            if (t instanceof SkillTool) {
+                continue;
+            }
+            baseTools.add(t);
+            builtInNames.add(t.name());
+        }
+
+        // 重新加载
+        SkillLoader loader = new SkillLoader(Path.of(config.getSkillDir()));
+        List<Skill> skills = loader.load();
+
+        int registered = 0;
+        for (Skill skill : skills) {
+            if (builtInNames.contains(skill.getName())) {
+                System.out.println("[警告] SKILL '" + skill.getName() + "' 与内置工具重名，已跳过");
+                continue;
+            }
+            baseTools.add(new SkillTool(skill, messages, apiClient, baseTools,
+                    config.getSkillMaxTurns(), config.getSkillContextMessages()));
+            builtInNames.add(skill.getName());
+            registered++;
+        }
+
+        this.tools.clear();
+        this.tools.addAll(baseTools);
+        System.out.println("已重新加载 " + registered + " 个SKILL，共 " + this.tools.size() + " 个工具");
+    }
 
     String executeTool(ToolCall tc) {
         try {

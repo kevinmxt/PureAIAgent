@@ -36,6 +36,10 @@ public class AppConfig {
     private static final double DEFAULT_EXCEL_SUB_MODEL_TEMPERATURE = 0.0;
     private static final int DEFAULT_EXCEL_MAX_ROWS = 100;
     private static final boolean DEFAULT_EXCEL_RESTRICT_PATH = true;
+
+    private static final String DEFAULT_SKILL_DIR = "./.PureAIAgent/skill";
+    private static final int DEFAULT_SKILL_MAX_TURNS = 10;
+    private static final int DEFAULT_SKILL_CONTEXT_MESSAGES = 20;
     static final String DEFAULT_EXCEL_SUB_MODEL_PROMPT = """
             你是一个Excel操作翻译助手。将自然语言描述的Excel操作需求翻译为JSON操作序列。
 
@@ -120,6 +124,10 @@ public class AppConfig {
     private final int excelMaxRows;
     private final boolean excelRestrictPath;
 
+    private final String skillDir;
+    private final int skillMaxTurns;
+    private final int skillContextMessages;
+
     // ============ 构造器 ============
 
     /** @deprecated 委托给 Builder，保留以兼容旧调用者 */
@@ -149,6 +157,10 @@ public class AppConfig {
         this.excelSubModelTemperature = builder.excelSubModelTemperature;
         this.excelMaxRows = builder.excelMaxRows;
         this.excelRestrictPath = builder.excelRestrictPath;
+
+        this.skillDir = builder.skillDir;
+        this.skillMaxTurns = builder.skillMaxTurns;
+        this.skillContextMessages = builder.skillContextMessages;
     }
 
     // ============ 静态工厂 ============
@@ -213,6 +225,9 @@ public class AppConfig {
                 .excelSubModelTemperature(parseDouble(props.getProperty("excel.sub_model.temperature"), DEFAULT_EXCEL_SUB_MODEL_TEMPERATURE))
                 .excelMaxRows(parseInt(props.getProperty("excel.max_rows"), DEFAULT_EXCEL_MAX_ROWS))
                 .excelRestrictPath(Boolean.parseBoolean(props.getProperty("excel.restrict_path", "true")))
+                .skillDir(props.getProperty("skill.dir", DEFAULT_SKILL_DIR))
+                .skillMaxTurns(parseInt(props.getProperty("skill.max_turns"), DEFAULT_SKILL_MAX_TURNS))
+                .skillContextMessages(parseInt(props.getProperty("skill.context_messages"), DEFAULT_SKILL_CONTEXT_MESSAGES))
                 .build();
     }
 
@@ -290,6 +305,10 @@ public class AppConfig {
     public int getExcelMaxRows()                 { return excelMaxRows; }
     public boolean isExcelRestrictPath()         { return excelRestrictPath; }
 
+    public String getSkillDir()                  { return skillDir; }
+    public int getSkillMaxTurns()                { return skillMaxTurns; }
+    public int getSkillContextMessages()         { return skillContextMessages; }
+
     // ============ Builder ============
 
     public static class Builder {
@@ -310,6 +329,10 @@ public class AppConfig {
         int excelMaxRows = DEFAULT_EXCEL_MAX_ROWS;
         boolean excelRestrictPath = DEFAULT_EXCEL_RESTRICT_PATH;
 
+        String skillDir = DEFAULT_SKILL_DIR;
+        int skillMaxTurns = DEFAULT_SKILL_MAX_TURNS;
+        int skillContextMessages = DEFAULT_SKILL_CONTEXT_MESSAGES;
+
         public Builder apiUrl(String v)         { this.apiUrl = v; return this; }
         public Builder apiKey(String v)         { this.apiKey = v; return this; }
         public Builder modelName(String v)      { this.modelName = v; return this; }
@@ -325,6 +348,9 @@ public class AppConfig {
         public Builder excelSubModelTemperature(double v)  { this.excelSubModelTemperature = v; return this; }
         public Builder excelMaxRows(int v)                 { this.excelMaxRows = v; return this; }
         public Builder excelRestrictPath(boolean v)        { this.excelRestrictPath = v; return this; }
+        public Builder skillDir(String v)                  { this.skillDir = v; return this; }
+        public Builder skillMaxTurns(int v)                { this.skillMaxTurns = v; return this; }
+        public Builder skillContextMessages(int v)         { this.skillContextMessages = v; return this; }
 
         public AppConfig build() { return new AppConfig(this); }
     }

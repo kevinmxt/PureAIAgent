@@ -1,6 +1,6 @@
 # CLAUDE.md
 
-一个极简的 AI 命令行对话程序，JDK 21 原生 HTTP 客户端 + Jackson JSON，调用 DeepSeek API，支持 Function Calling 工具调用（Shell 命令执行、Excel 操作）。
+一个极简的 AI 命令行对话程序，JDK 21 原生 HTTP 客户端 + Jackson JSON，调用 DeepSeek API，支持 Function Calling 工具调用（Shell 命令执行、Excel 操作、SKILL 技能系统）。
 
 ## 快速开始
 

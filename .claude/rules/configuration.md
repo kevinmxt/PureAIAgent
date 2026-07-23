@@ -31,6 +31,9 @@
 | `excel.sub_model.temperature` | double | `0.0` | 子模型温度（确定性输出） |
 | `excel.max_rows` | int | `100` | 读取数据最大返回行数 |
 | `excel.restrict_path` | boolean | `true` | 是否限制文件操作仅在工作目录 |
+| `skill.dir` | String | `./PureAIAgent/skill` | SKILL 文件目录 |
+| `skill.max_turns` | int | `10` | 子 agent 最大对话轮数 |
+| `skill.context_messages` | int | `20` | 子 agent 继承主对话上下文消息数 |
 
 ## API 密钥回退规则
 

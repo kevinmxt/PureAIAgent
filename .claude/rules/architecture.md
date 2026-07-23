@@ -24,6 +24,10 @@ src/main/java/me/maxt/
     └── excel/
         ├── ExcelTool.java         ← Excel 工具总协调器
         └── ExcelOperationExecutor.java ← POI 操作引擎
+    └── skill/
+        ├── Skill.java             ← SKILL 数据模型 (解析 SKILL.md)
+        ├── SkillLoader.java       ← SKILL 加载器 (扫描目录)
+        └── SkillTool.java         ← SKILL 工具包装器 (子 agent 多轮循环)
 
 src/test/java/me/maxt/
 ├── SimpleAIChatMockTest.java      ← Mock单元测试 (6用例)
@@ -46,7 +50,8 @@ src/test/java/me/maxt/
 │   - 工具调用循环 (commonResponse)                           │
 │   - 流式输出格式化 (streamChat)                             │
 │   - 工具调用确认 (callTool) → 分发执行 (executeTool)          │
-│   - 特殊命令: 退出/history/debug/tokens                     │
+│   - SKILL 加载与重载 (构造函数 / reloadSkills)                  │
+│   - 特殊命令: 退出/history/debug/tokens/reload-skills          │
 │                                                            │
 │ 不包含: 请求体构建、JSON解析、SSE解析                        │
 ├────────────────────────────────────────────────────────────┤
@@ -114,21 +119,23 @@ src/test/java/me/maxt/
 └──────────┬───────────────┘
     ┌──────┴──────────────────┐
     │                         │
-┌───┴───────────┐  ┌──────────┴──────────────────────┐
-│ ShellTool     │  │ ExcelTool (tool/excel/)         │
-│ name→run_shell│  │ name→excel_tool                 │
-│ _command      │  ├────────────────────────────────┤
-└───────────────┘  │ ◆ execute()                     │
-                   │   1. 解析参数+文件安全检查        │
-                   │   2. 子模型LLM翻译NL→JSON操作序列 │
-                   │   3. ExcelOperationExecutor执行   │
-                   │   4. 返回结构化摘要               │
-                   ├────────────────────────────────┤
-                   │ ExcelOperationExecutor          │
-                   │ ├─ read → Markdown表格+merge信息 │
-                   │ ├─ write → cells数组→Excel(含公式)│
-                   │ └─ chart → 柱状图/折线图/饼图    │
-                   └────────────────────────────────┘
+┌───┴───────────┐  ┌──────────┴──────────────────────┐  ┌──────────┴──────────────────────┐
+│ ShellTool     │  │ ExcelTool (tool/excel/)         │  │ SkillTool (tool/skill/)         │
+│ name→run_shell│  │ name→excel_tool                 │  │ name→skill.name (动态)           │
+│ _command      │  ├────────────────────────────────┤  ├────────────────────────────────┤
+└───────────────┘  │ ◆ execute()                     │  │ ◆ execute()                     │
+                   │   1. 解析参数+文件安全检查        │  │   1. buildSubMessages (继承上下文)│
+                   │   2. 子模型LLM翻译NL→JSON操作序列 │  │   2. 子 agent 多轮对话循环        │
+                   │   3. ExcelOperationExecutor执行   │  │   3. 自动执行工具 (无需确认)       │
+                   │   4. 返回结构化摘要               │  │   4. 返回最终回答                  │
+                   ├────────────────────────────────┤  ├────────────────────────────────┤
+                   │ ExcelOperationExecutor          │  │ 子 agent 特性:                    │
+                   │ ├─ read → Markdown表格+merge信息 │  │ ├─ 复用主 ChatApiClient           │
+                   │ ├─ write → cells数组→Excel(含公式)│  │ ├─ 继承主对话全部工具 (排除自身)    │
+                   │ └─ chart → 柱状图/折线图/饼图    │  │ ├─ 最大轮数限制 (默认10)           │
+                   └────────────────────────────────┘  │ ├─ 按键中断 (q)                   │
+                                                       │ └─ 防止递归调用                    │
+                                                       └────────────────────────────────┘
 ```
 
 ## 数据流
@@ -202,6 +209,30 @@ SimpleAIChat.main()
 - **文件安全**: 默认仅允许操作 `excel.work.dir` 目录下的文件，可在配置中关闭限制
 - **关键约束**: 同一个文件只能被 `new XSSFWorkbook()` 打开一次，`buildFileContext` 不再单独打开文件
 - **POI 双写陷阱**: `XSSFWorkbook.write(OutputStream)` 后调用 `close()` 会触发 `OPCPackage.saveImpl()` 内部重新保存到原始文件，覆盖已写入内容并抛出 `EOFException: Unexpected end of ZLIB input stream`。正确做法: write 到 `ByteArrayOutputStream` → close workbook → 写字节到文件
+
+### 添加新 SKILL
+在 `.PureAIAgent/skill/{skill-name}/SKILL.md` 下创建 Markdown 文件，YAML frontmatter 声明 `name` 和 `description`，正文为子 agent 的 system prompt。启动时自动加载，无需修改代码。
+
+SKILL.md 示例:
+```markdown
+---
+name: code-review
+description: 审查代码变更，检查bug和安全漏洞
+---
+
+# 代码审查流程
+1. 用 git diff 查看变更
+2. 逐文件审查代码质量
+3. 汇总问题列表
+```
+
+### SKILL 架构要点
+- **子 agent 模式**: SkillTool 内部启动独立的多轮对话循环，复用主 ChatApiClient 和主模型配置
+- **上下文继承**: 子 agent 继承主对话最近 N 条消息（默认 20 条），截断到最后一条 user 消息为止
+- **工具继承**: 子 agent 拥有主对话全部工具（排除自身 SkillTool，防递归调用）
+- **自动执行**: 子 agent 内部的工具调用无需用户确认，直接执行
+- **中断机制**: 子 agent 每轮检查 `System.in`，按下 `q` 键可中断执行
+- **名称冲突**: 若 SKILL name 与内置 Tool 同名（如 `run_shell_command`），skill 被跳过并打印警告
 
 ### 切换模型/API
 - **同协议模型（OpenAI 兼容）**: 修改 `config.properties` 中的 `api.url` 和 `model.name`，无需重新打包
