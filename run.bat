@@ -2,10 +2,10 @@
 chcp 65001 >nul
 setlocal
 
-if "%OPENAI_API_KEY%"=="" (
+if "%OPENAI_API_KEY4CHAT%"=="" (
     if not exist "%~dp0config.properties" (
         if not exist "%~dp0target\config.properties" (
-            echo [警告] 未设置 OPENAI_API_KEY 环境变量，也找不到 config.properties
+            echo [警告] 未设置 OPENAI_API_KEY4CHAT 环境变量，也找不到 config.properties
             echo 请设置环境变量或在 config.properties 中配置 api.key
         )
     )

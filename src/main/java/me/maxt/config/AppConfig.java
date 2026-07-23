@@ -228,7 +228,7 @@ public class AppConfig {
         if (fromConfig != null && !fromConfig.isBlank()) {
             return fromConfig;
         }
-        String env = System.getenv("OPENAI_API_KEY");
+        String env = System.getenv("OPENAI_API_KEY4CHAT");
         if (env != null && !env.isBlank()) {
             return env;
         }

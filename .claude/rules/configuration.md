@@ -36,12 +36,12 @@
 
 主模型:
 ```
-config.properties 的 api.key  >  OPENAI_API_KEY 环境变量  >  空字符串
+config.properties 的 api.key  >  OPENAI_API_KEY4CHAT 环境变量  >  空字符串
 ```
 
 子模型 (Excel):
 ```
-excel.sub_model.key  >  config.properties 的 api.key  >  OPENAI_API_KEY 环境变量  >  空字符串
+excel.sub_model.key  >  config.properties 的 api.key  >  OPENAI_API_KEY4CHAT 环境变量  >  空字符串
 ```
 
 三者均未设置时 API 调用将返回 401 错误。

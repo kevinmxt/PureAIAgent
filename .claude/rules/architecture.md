@@ -189,7 +189,7 @@ SimpleAIChat.main()
 | Mock 单元测试 | `SimpleAIChatMockTest.java` | `mvn test` | Mock ChatApiClient, 测试对话流程 |
 | 解析测试 | `DeepSeekApiClientTest.java` | `mvn test` | 测试响应解析准确性 |
 | Excel 引擎测试 | `ExcelOperationExecutorTest.java` | `mvn test` | 测试 POI 操作：坐标解析、read/write/chart、cells 数组格式、公式写入、样式预设、类型推断 |
-| 集成测试 | `SimpleAIChatIntegrationTest.java` | `mvn test -Pintegration` | 真实 API, 需 `OPENAI_API_KEY` |
+| 集成测试 | `SimpleAIChatIntegrationTest.java` | `mvn test -Pintegration` | 真实 API, 需 `OPENAI_API_KEY4CHAT` |
 
 ## 扩展指南
 

@@ -20,7 +20,7 @@ import static org.junit.jupiter.api.Assumptions.assumeTrue;
 class SimpleAIChatIntegrationTest {
 
     private static final String API_URL = "https://api.deepseek.com/chat/completions";
-    private static final String API_KEY = System.getenv("OPENAI_API_KEY");
+    private static final String API_KEY = System.getenv("OPENAI_API_KEY4CHAT");
     private static final String MODEL_NAME = "deepseek-v4-flash";
     private static final String SYSTEM_PROMPT = "你是一个友好、有帮助的AI助手。请用简洁清晰的中文回答问题。";
 
@@ -29,7 +29,7 @@ class SimpleAIChatIntegrationTest {
     @BeforeEach
     void setUp() {
         assumeTrue(API_KEY != null && !API_KEY.isBlank(),
-                "跳过集成测试: 未设置 OPENAI_API_KEY 环境变量");
+                "跳过集成测试: 未设置 OPENAI_API_KEY4CHAT 环境变量");
 
         ChatApiClient client = new DeepSeekApiClient(API_URL, API_KEY, MODEL_NAME, SYSTEM_PROMPT);
         chat = new SimpleAIChat(client);
