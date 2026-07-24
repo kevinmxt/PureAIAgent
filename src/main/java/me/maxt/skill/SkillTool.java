@@ -3,12 +3,14 @@ package me.maxt.skill;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.ObjectNode;
+import me.maxt.AgentLoop;
 import me.maxt.api.ApiException;
 import me.maxt.api.ChatApiClient;
 import me.maxt.api.DeepSeekApiClient;
 import me.maxt.model.Message;
 import me.maxt.model.ToolCall;
 import me.maxt.tool.Tool;
+import me.maxt.tool.confirmation.AlwaysAllowPolicy;
 
 import java.io.IOException;
 import java.util.ArrayList;
@@ -75,43 +77,52 @@ public class SkillTool implements Tool {
         Thread listener = startInterruptListener();
 
         try {
-            int turn = 0;
-            while (turn < maxTurns) {
-                if (interrupted.get()) {
-                    System.out.println("[技能 " + skillName + "] 用户中断");
-                    return "[技能 " + skillName + " 已中断] 用户取消了执行。";
+            AgentLoop loop = new AgentLoop(apiClient, subTools,
+                    new AlwaysAllowPolicy(), maxTurns,
+                    () -> interrupted.get());
+
+            AgentLoop.Callback callback = new AgentLoop.Callback() {
+                @Override
+                public void onBeforeTool(ToolCall tc) {
+                    System.out.println("[技能 " + skillName + " 工具调用] "
+                            + tc.getFunction().getName() + ": " + tc.getFunction().getArguments());
                 }
 
-                Message response;
-                try {
-                    response = apiClient.chat(subMessages, subTools);
-                } catch (ApiException e) {
-                    return "[技能 " + skillName + " 执行失败] API错误: "
-                            + DeepSeekApiClient.parseError(e.getMessage());
+                @Override
+                public void onAfterTool(ToolCall tc, String result) {
+                    System.out.println("[技能 " + skillName + " 工具结果] " + result);
                 }
-                subMessages.add(response);
+            };
 
-                if (response.getToolCalls() != null && !response.getToolCalls().isEmpty()) {
-                    for (ToolCall tc : response.getToolCalls()) {
-                        System.out.println("[技能 " + skillName + " 工具调用] "
-                                + tc.getFunction().getName() + ": " + tc.getFunction().getArguments());
-                        String result = executeSubTool(tc);
-                        System.out.println("[技能 " + skillName + " 工具结果] " + result);
-                        subMessages.add(new Message("tool", result, null, null, tc.getId()));
-                    }
-                    turn++;
-                    continue;
-                }
-
-                String finalContent = response.getContent() != null ? response.getContent() : "";
-                System.out.println("[技能 " + skillName + "] 执行完成 (" + (turn + 1) + " 轮)");
-                return finalContent;
+            Message finalMsg;
+            try {
+                finalMsg = loop.run(subMessages, callback);
+            } catch (ApiException e) {
+                return "[技能 " + skillName + " 执行失败] API错误: "
+                        + DeepSeekApiClient.parseError(e.getMessage());
             }
 
-            return "[技能 " + skillName + " 已达最大轮数] 执行了 " + maxTurns
-                    + " 轮后被中断。请尝试简化需求或增加 skill.max_turns 配置。";
+            if (interrupted.get()) {
+                System.out.println("[技能 " + skillName + "] 用户中断");
+                return "[技能 " + skillName + " 已中断] 用户取消了执行。";
+            }
+
+            // 最后一条 assistant 消息仍含 toolCalls → 达到最大轮数
+            Message lastMsg = subMessages.get(subMessages.size() - 1);
+            if ("assistant".equals(lastMsg.getRole())
+                    && lastMsg.getToolCalls() != null && !lastMsg.getToolCalls().isEmpty()) {
+                return "[技能 " + skillName + " 已达最大轮数] 执行了 " + maxTurns
+                        + " 轮后被中断。请尝试简化需求或增加 skill.max_turns 配置。";
+            }
+
+            int assistantCount = 0;
+            for (Message m : subMessages) {
+                if ("assistant".equals(m.getRole())) assistantCount++;
+            }
+            System.out.println("[技能 " + skillName + "] 执行完成 (" + assistantCount + " 轮)");
+            return finalMsg != null && finalMsg.getContent() != null ? finalMsg.getContent() : "";
         } finally {
-            interrupted.set(true); // 停止监听线程
+            interrupted.set(true);
             try {
                 listener.join(1000);
             } catch (InterruptedException ignored) {
@@ -154,20 +165,6 @@ public class SkillTool implements Tool {
         }
 
         return sub;
-    }
-
-    private String executeSubTool(ToolCall tc) {
-        try {
-            JsonNode args = MAPPER.readTree(tc.getFunction().getArguments());
-            for (Tool tool : subTools) {
-                if (tool.name().equals(tc.getFunction().getName())) {
-                    return tool.execute(args);
-                }
-            }
-            return "未找到工具: " + tc.getFunction().getName();
-        } catch (Exception e) {
-            return "工具执行出错: " + e.getMessage();
-        }
     }
 
     private Thread startInterruptListener() {

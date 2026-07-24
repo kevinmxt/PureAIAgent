@@ -1,7 +1,5 @@
 package me.maxt;
 
-import com.fasterxml.jackson.databind.JsonNode;
-import com.fasterxml.jackson.databind.ObjectMapper;
 import me.maxt.api.ApiException;
 import me.maxt.api.ChatApiClient;
 import me.maxt.api.DeepSeekApiClient;
@@ -13,12 +11,14 @@ import me.maxt.model.TokenUsageStats;
 import me.maxt.model.ToolCall;
 import me.maxt.tool.ShellTool;
 import me.maxt.tool.Tool;
+import me.maxt.tool.confirmation.AlwaysAllowPolicy;
+import me.maxt.tool.confirmation.InteractiveConsolePolicy;
+import me.maxt.tool.confirmation.ToolConfirmationPolicy;
 import me.maxt.tool.excel.ExcelTool;
 import me.maxt.skill.Skill;
 import me.maxt.skill.SkillLoader;
 import me.maxt.skill.SkillTool;
 
-import java.io.IOException;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Path;
 import java.util.ArrayList;
@@ -28,7 +28,6 @@ import java.util.Set;
 
 import org.jline.reader.LineReader;
 import org.jline.reader.LineReaderBuilder;
-import org.jline.terminal.Attributes;
 import org.jline.terminal.Terminal;
 import org.jline.terminal.TerminalBuilder;
 
@@ -38,15 +37,10 @@ import org.jline.terminal.TerminalBuilder;
  */
 public class SimpleAIChat {
 
-    private static final ObjectMapper MAPPER = new ObjectMapper();
-
     private final ChatApiClient apiClient;
     private final List<Message> messages = new ArrayList<>();
     private final List<Tool> tools;
-    /**
-     * 允许的工具调用集合
-     */
-    private final Set<String> allowedToolActions = new HashSet<>();
+    private ToolConfirmationPolicy confirmationPolicy = new AlwaysAllowPolicy();
     private Terminal terminal;
     private LineReader reader;
 
@@ -104,6 +98,7 @@ public class SimpleAIChat {
     public void setTerminal(Terminal terminal, LineReader reader) {
         this.terminal = terminal;
         this.reader = reader;
+        this.confirmationPolicy = new InteractiveConsolePolicy(terminal, reader);
     }
 
     // ============ 主程序 ============
@@ -187,69 +182,34 @@ public class SimpleAIChat {
         TokenUsageStats.clearSession();
         messages.add(new Message("user", userInput));
 
-        while (true) {
-            Message assistantMsg;
-            try {
-                assistantMsg = apiClient.chat(messages, tools);
-            } catch (ApiException e) {
-                System.out.println("API错误 (状态码: " + e.getStatusCode() + "): "
-                        + DeepSeekApiClient.parseError(e.getMessage()));
-                return;
-            }
-            messages.add(assistantMsg);
-
-            if (assistantMsg.getToolCalls() != null && !assistantMsg.getToolCalls().isEmpty()) {
-                for (ToolCall tc : assistantMsg.getToolCalls()) {
-                    String result = callTool(tc);
-                    messages.add(new Message("tool", result, null, null, tc.getId()));
-                }
-                continue;
+        AgentLoop loop = new AgentLoop(apiClient, tools, confirmationPolicy, Integer.MAX_VALUE);
+        AgentLoop.Callback callback = new AgentLoop.Callback() {
+            @Override
+            public void onBeforeTool(ToolCall tc) {
+                System.out.println("[工具调用] " + tc.getFunction().getName() + ": " + tc.getFunction().getArguments());
             }
 
-            if (assistantMsg.getReasoningContent() != null && !assistantMsg.getReasoningContent().isEmpty()) {
-                System.out.println("[思考过程] " + assistantMsg.getReasoningContent());
-                System.out.println("---");
+            @Override
+            public void onAfterTool(ToolCall tc, String result) {
+                System.out.println("[工具结果] " + result);
             }
-            System.out.println("AI: " + (assistantMsg.getContent() != null ? assistantMsg.getContent() : ""));
-            TokenUsageStats.accumulateTotal();
-            break;
+        };
+
+        Message assistantMsg;
+        try {
+            assistantMsg = loop.run(messages, callback);
+        } catch (ApiException e) {
+            System.out.println("API错误 (状态码: " + e.getStatusCode() + "): "
+                    + DeepSeekApiClient.parseError(e.getMessage()));
+            return;
         }
-    }
 
-    String callTool(ToolCall tc) throws IOException {
-        System.out.println("[工具调用] " + tc.getFunction().getName() + ": " + tc.getFunction().getArguments());
-        if (!allowedToolActions.contains(tc.getFunction().getArguments())) {
-            System.out.println("1.本次调用允许");
-            System.out.println("2.本次会话均允许");
-            System.out.println("3.本次调用不允许");
-            System.out.println("4.结束本次会话");
-
-            String choice;
-            if (reader != null) {
-                choice = reader.readLine("请选择: ");
-            } else {
-                // 无终端环境（测试/CI），自动允许本次调用
-                choice = "1";
-            }
-
-            switch (choice) {
-                case "1":
-                    break;
-                case "2":
-                    allowedToolActions.add(tc.getFunction().getArguments());
-                    break;
-                case "3":
-                    System.out.println("本次调用已拒绝");
-                    return "拒绝本次调用";
-                case "4":
-                    return "[停止工具调用,询问用户需求]";
-                default:
-                    System.out.println("无效的选择:" + choice);
-            }
+        if (assistantMsg.getReasoningContent() != null && !assistantMsg.getReasoningContent().isEmpty()) {
+            System.out.println("[思考过程] " + assistantMsg.getReasoningContent());
+            System.out.println("---");
         }
-        String result = executeTool(tc);
-        System.out.println("[工具结果] " + result);
-        return result;
+        System.out.println("AI: " + (assistantMsg.getContent() != null ? assistantMsg.getContent() : ""));
+        TokenUsageStats.accumulateTotal();
     }
 
     // ============ 流式对话 ============
@@ -337,17 +297,4 @@ public class SimpleAIChat {
         System.out.println("已重新加载 " + registered + " 个SKILL，共 " + this.tools.size() + " 个工具");
     }
 
-    String executeTool(ToolCall tc) {
-        try {
-            JsonNode args = MAPPER.readTree(tc.getFunction().getArguments());
-            for (Tool tool : tools) {
-                if (tool.name().equals(tc.getFunction().getName())) {
-                    return tool.execute(args);
-                }
-            }
-            return "未找到工具: " + tc.getFunction().getName();
-        } catch (Exception e) {
-            return "工具执行出错: " + e.getMessage();
-        }
-    }
 }
