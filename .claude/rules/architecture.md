@@ -5,6 +5,7 @@
 ```
 src/main/java/me/maxt/
 ├── SimpleAIChat.java              ← 主入口,对话流程编排
+├── AgentLoop.java                 ← 统一工具调用循环（SimpleAIChat+SkillTool复用）
 ├── config/
 │   └── AppConfig.java             ← 配置加载（Properties 文件,三级回退）
 ├── api/
@@ -13,21 +14,29 @@ src/main/java/me/maxt/
 │   ├── ApiException.java          ← API异常
 │   ├── DeltaEvent.java            ← 流式增量事件 record
 │   └── DeltaHandler.java          ← 流式回调函数式接口
+├── command/
+│   ├── Command.java               ← 特殊命令接口 (name/aliases/description)
+│   └── CommandDispatcher.java     ← 命令分发器 (匹配→分发,自动生成横幅)
 ├── model/
 │   ├── Message.java               ← 消息模型
 │   ├── ToolCall.java              ← 工具调用模型
 │   ├── TokenUsage.java            ← 单次用量数据
-│   └── TokenUsageStats.java       ← 用量统计（会话+总量累加）
+│   └── TokenUsageStats.java       ← 用量统计（实例类,注入到DeepSeekApiClient）
 └── tool/
     ├── Tool.java                  ← 工具接口 (扩展点)
     ├── ShellTool.java             ← Shell 命令执行工具
-    └── excel/
-        ├── ExcelTool.java         ← Excel 工具总协调器
-        └── ExcelOperationExecutor.java ← POI 操作引擎
-    └── skill/
-        ├── Skill.java             ← SKILL 数据模型 (解析 SKILL.md)
-        ├── SkillLoader.java       ← SKILL 加载器 (扫描目录)
-        └── SkillTool.java         ← SKILL 工具包装器 (子 agent 多轮循环)
+    ├── excel/
+    │   ├── ExcelTool.java         ← Excel 工具总协调器
+    │   └── ExcelOperationExecutor.java ← POI 操作引擎
+    ├── skill/
+    │   ├── Skill.java             ← SKILL 数据模型 (解析 SKILL.md)
+    │   ├── SkillLoader.java       ← SKILL 加载器 (扫描目录)
+    │   └── SkillTool.java         ← SKILL 工具包装器 (委托AgentLoop)
+    └── confirmation/
+        ├── ToolConfirmationPolicy.java   ← 工具确认策略接口 (接缝)
+        ├── ConfirmationDecision.java     ← 确认决策枚举
+        ├── InteractiveConsolePolicy.java ← 交互式控制台确认（4选项菜单）
+        └── AlwaysAllowPolicy.java        ← 自动允许（CI/子agent）
 
 src/test/java/me/maxt/
 ├── SimpleAIChatMockTest.java      ← Mock单元测试 (6用例)
@@ -47,26 +56,30 @@ src/test/java/me/maxt/
 ├────────────────────────────────────────────────────────────┤
 │ 职责: 对话流程编排                                          │
 │   - 用户输入循环 (main)                                     │
-│   - 工具调用循环 (commonResponse)                           │
-│   - 流式输出格式化 (streamChat)                             │
-│   - 工具调用确认 (callTool) → 分发执行 (executeTool)          │
-│   - SKILL 加载与重载 (构造函数 / reloadSkills)                  │
-│   - 特殊命令: 退出/history/debug/tokens/reload-skills          │
+│   - 命令分发 → CommandDispatcher                            │
+│   - 非流式对话 → AgentLoop (委托工具调用循环)                 │
+│   - 流式输出格式化 (streamChat, 不经过AgentLoop)             │
+│   - SKILL 加载与重载 (构造函数 / reloadSkills)                 │
+│   - 持有 TokenUsageStats 实例 + ToolConfirmationPolicy      │
 │                                                            │
-│ 不包含: 请求体构建、JSON解析、SSE解析                        │
+│ 不包含: 请求体构建、JSON解析、SSE解析、工具执行               │
 ├────────────────────────────────────────────────────────────┤
 │ main()                                                      │
-│   └─ AppConfig.load() → TerminalBuilder(UTF-8) → LineReader│
-│      └─ new DeepSeekApiClient(config)                       │
-│         → new SimpleAIChat(client) → 主循环                  │
+│   └─ AppConfig.load() → new DeepSeekApiClient(config)       │
+│      → client.setTokenUsageStats()                          │
+│      → new SimpleAIChat(client, config)                      │
+│      → 注册 Command → CommandDispatcher                      │
+│      → TerminalBuilder(UTF-8) → LineReader                  │
+│      → setTerminal() (创建 InteractiveConsolePolicy)        │
+│      → 主循环 → dispatcher.dispatch() → stream/Chat/commonResponse│
 ├────────────────────────────────────────────────────────────┤
 │ ◆ commonResponse(userInput)                                 │
 │   ┌──────────────────────────────────────────────┐         │
-│   │ 1. user msg → apiClient.chat(msgs, tools)    │         │
-│   │ 2. 返回 Message → 检查 toolCalls              │         │
-│   │ 3. 有工具调用 → callTool() → executeTool()              │         │
-│   │    → 回到步骤1 (循环)                          │         │
-│   │ 4. 无工具调用 → 输出思考+回答 → 结束          │         │
+│   │ 1. tokenStats.clearSession()                  │         │
+│   │ 2. user msg → messages                        │         │
+│   │ 3. new AgentLoop(client,tools,policy,∞)       │         │
+│   │    → loop.run(messages, callback)              │         │
+│   │ 4. 输出思考+回答 → tokenStats.accumulateTotal()│         │
 │   └──────────────────────────────────────────────┘         │
 ├────────────────────────────────────────────────────────────┤
 │ ◆ streamChat(userMessage)                                   │
@@ -76,8 +89,62 @@ src/test/java/me/maxt/
 │   │ 3. 返回完整 Message → 记录到 messages         │         │
 │   └──────────────────────────────────────────────┘         │
 ├────────────────────────────────────────────────────────────┤
-│ ◆ callTool(ToolCall) → 用户确认(1/2/3/4) → executeTool        │
-│ ◆ executeTool(ToolCall) → 工具分发                          │
+│ ◆ reloadSkills(config) → 重建 tools 列表                    │
+└────────────────────────────────────────────────────────────┘
+
+┌────────────────────────────────────────────────────────────┐
+│ AgentLoop (me.maxt/)                                       │
+│ 构造器: (apiClient, tools, confirmationPolicy, maxTurns    │
+│          [, cancelCheck])                                  │
+├────────────────────────────────────────────────────────────┤
+│ ◆ run(messages, callback) → Message                        │
+│   ┌──────────────────────────────────────────────┐         │
+│   │ while turn < maxTurns:                        │         │
+│   │   if cancelCheck → break                       │         │
+│   │   msg = apiClient.chat(messages, tools)       │         │
+│   │   if !hasToolCalls → return msg               │         │
+│   │   for each ToolCall:                           │         │
+│   │     callback.onBeforeTool(tc)                  │         │
+│   │     decision = policy.confirm(tc)              │         │
+│   │     execute tool → callback.onAfterTool(tc,r)  │         │
+│   │   turn++                                       │         │
+│   └──────────────────────────────────────────────┘         │
+├────────────────────────────────────────────────────────────┤
+│ Callback (内部接口)                                         │
+│   onBeforeTool(ToolCall) — 工具执行前（日志）                 │
+│   onAfterTool(ToolCall, result) — 工具执行后（日志）          │
+└────────────────────────────────────────────────────────────┘
+
+┌────────────────────────────────────────────────────────────┐
+│ ToolConfirmationPolicy (tool/confirmation/)                │
+├────────────────────────────────────────────────────────────┤
+│ <<interface>> ToolConfirmationPolicy                       │
+│   + confirm(ToolCall) → ConfirmationDecision               │
+├────────────────────────────────────────────────────────────┤
+│ ConfirmationDecision 枚举                                   │
+│   ALLOW | ALLOW_ALWAYS | DENY | STOP_SESSION               │
+├────────────────────────────────────────────────────────────┤
+│ 适配器:                                                     │
+│   InteractiveConsolePolicy — 4选项菜单+LineReader           │
+│     (持有 allowedActions Set, 由 setTerminal 注入)         │
+│   AlwaysAllowPolicy — CI/子agent, 始终返回 ALLOW            │
+└────────────────────────────────────────────────────────────┘
+
+┌────────────────────────────────────────────────────────────┐
+│ CommandDispatcher (command/)                               │
+├────────────────────────────────────────────────────────────┤
+│ + register(Command)                                        │
+│ + dispatch(input) → Boolean (null=未匹配, true=已处理,false=退出)│
+│ + bannerText() → String (从各 Command 自动生成)              │
+├────────────────────────────────────────────────────────────┤
+│ <<interface>> Command                                      │
+│   + name(): String        — 显示名称                        │
+│   + aliases(): String     — 触发别名(逗号分隔)               │
+│   + description(): String  — 一句话描述                     │
+│   + handle(input): boolean — true=退出程序                  │
+├────────────────────────────────────────────────────────────┤
+│ 已注册命令: 退出/exit, 对话历史/history, 清空历史/clear,       │
+│           debug, tokens, /reload-skills                    │
 └────────────────────────────────────────────────────────────┘
 
 ┌────────────────────────────────────────────────────────────┐
@@ -96,6 +163,7 @@ src/test/java/me/maxt/
     │ - modelName           │
     │ - systemPrompt        │
     │ - httpClient          │
+    │ - tokenStats (可选)    │  setTokenUsageStats() 注入，null=不统计
     ├───────────────────────┤
     │ chat()                │  → buildRequestBody → HTTP → parse
     │ chatStream()          │  → buildRequestBody → HTTP → SSE逐行解析
@@ -103,7 +171,7 @@ src/test/java/me/maxt/
     ├───────────────────────┤
     │ buildRequestBody()    │  (private)
     │ parseAssistantMessage()│  (package-private, 供测试)
-    │ parseUsage()          │  (package-private static)
+    │ parseUsage()          │  (package-private static, 纯解析)
     │ parseDelta()          │  (package-private, 供测试)
     │ parseError()          │  (public static)
     └───────────────────────┘
@@ -125,15 +193,17 @@ src/test/java/me/maxt/
 │ _command      │  ├────────────────────────────────┤  ├────────────────────────────────┤
 └───────────────┘  │ ◆ execute()                     │  │ ◆ execute()                     │
                    │   1. 解析参数+文件安全检查        │  │   1. buildSubMessages (继承上下文)│
-                   │   2. 子模型LLM翻译NL→JSON操作序列 │  │   2. 子 agent 多轮对话循环        │
-                   │   3. ExcelOperationExecutor执行   │  │   3. 自动执行工具 (无需确认)       │
-                   │   4. 返回结构化摘要               │  │   4. 返回最终回答                  │
+                   │   2. 子模型LLM翻译NL→JSON操作序列 │  │   2. new AgentLoop(AlwaysAllow)  │
+                   │   3. ExcelOperationExecutor执行   │  │    → loop.run(subMessages,cb)   │
+                   │   4. 返回结构化摘要               │  │   3. 返回最终回答                  │
                    ├────────────────────────────────┤  ├────────────────────────────────┤
                    │ ExcelOperationExecutor          │  │ 子 agent 特性:                    │
                    │ ├─ read → Markdown表格+merge信息 │  │ ├─ 复用主 ChatApiClient           │
                    │ ├─ write → cells数组→Excel(含公式)│  │ ├─ 继承主对话全部工具 (排除自身)    │
-                   │ └─ chart → 柱状图/折线图/饼图    │  │ ├─ 最大轮数限制 (默认10)           │
-                   └────────────────────────────────┘  │ ├─ 按键中断 (q)                   │
+                   │ └─ chart → 柱状图/折线图/饼图    │  │ ├─ AlwaysAllowPolicy (自动执行)   │
+                   └────────────────────────────────┘  │ ├─ cancelCheck → interrupted      │
+                                                       │ ├─ 最大轮数限制 (默认10)           │
+                                                       │ ├─ 按键中断 (q)                   │
                                                        │ └─ 防止递归调用                    │
                                                        └────────────────────────────────┘
 ```
@@ -146,7 +216,12 @@ src/test/java/me/maxt/
   ▼
 SimpleAIChat.main()
   │
+  ├─ CommandDispatcher.dispatch() → 已匹配 → continue/exit
+  │
   ├─[非流式]──▶ commonResponse()
+  │               │
+  │               ▼
+  │            AgentLoop.run(messages, callback)
   │               │
   │               ▼
   │            apiClient.chat(history, tools)
@@ -156,20 +231,20 @@ SimpleAIChat.main()
   │            ├─ buildRequestBody (含 system prompt + messages + tools)
   │            ├─ HTTP POST → DeepSeek API
   │            └─ parseAssistantMessage → Message
-  │               │
+  │               │    └─ tokenStats.accumulateSession() (if set)
   │               ▼
   │            Message (assistant)
   │               │
   │        ┌──────┴──────┐
   │        │ has toolCalls?
   │        ▼              ▼
-  │    callTool()   (用户确认)
+  │    policy.confirm()  ← ToolConfirmationPolicy (接缝)
+  │        │              ├─ InteractiveConsolePolicy (1/2/3/4菜单)
+  │        ▼              └─ AlwaysAllowPolicy (自动)
+  │    executeTool()     ← AgentLoop 内部
   │        │
   │        ▼
-  │    executeTool()
-  │        │
-  │        ▼
-  │    Message (tool) → 回到 commonResponse 循环
+  │    Message (tool) → 回到 AgentLoop 循环
   │
   └─[流式]──▶ streamChat()
                  │
@@ -181,7 +256,7 @@ SimpleAIChat.main()
               ├─ buildRequestBody (stream=true)
               ├─ HTTP POST(stream) → SSE InputStream
               └─ parseDelta × N → handler.onDelta(event)
-                 │
+                 │    └─ tokenStats.accumulateSession() (if set)
                  ▼
               DeltaHandler 实时打印
                  │
@@ -227,12 +302,25 @@ description: 审查代码变更，检查bug和安全漏洞
 ```
 
 ### SKILL 架构要点
-- **子 agent 模式**: SkillTool 内部启动独立的多轮对话循环，复用主 ChatApiClient 和主模型配置
+- **委托 AgentLoop**: SkillTool.execute() 创建 AgentLoop（AlwaysAllowPolicy + cancelCheck），不再自己维护 while 循环
+- **子 agent 模式**: SkillTool 内部启动独立的多轮对话，复用主 ChatApiClient 和主模型配置
 - **上下文继承**: 子 agent 继承主对话最近 N 条消息（默认 20 条），截断到最后一条 user 消息为止
 - **工具继承**: 子 agent 拥有主对话全部工具（排除自身 SkillTool，防递归调用）
-- **自动执行**: 子 agent 内部的工具调用无需用户确认，直接执行
-- **中断机制**: 子 agent 每轮检查 `System.in`，按下 `q` 键可中断执行
+- **自动执行**: 使用 AlwaysAllowPolicy，子 agent 内部工具调用无需用户确认，直接执行
+- **中断机制**: 子 agent 通过 cancelCheck（→AtomicBoolean）支持按键中断，按下 `q` 键可取消
 - **名称冲突**: 若 SKILL name 与内置 Tool 同名（如 `run_shell_command`），skill 被跳过并打印警告
+
+### AgentLoop 架构要点
+- **统一循环**: AgentLoop 封装 "API → toolCalls → confirm → execute → repeat" 循环，被 SimpleAIChat 和 SkillTool 复用
+- **Caller 回调**: Callback 接口（onBeforeTool/onAfterTool）让调用方注入日志输出
+- **确认接缝**: ToolConfirmationPolicy 接口分离确认逻辑，两个适配器：InteractiveConsolePolicy（4选项菜单）、AlwaysAllowPolicy（自动允许）
+- **取消支持**: 可选的 cancelCheck（BooleanSupplier）支持外部中断
+- **TokenUsageStats**: 改为实例类，通过 setTokenUsageStats() 注入到 DeepSeekApiClient，解析 API 响应时自动累加（null 时跳过）
+
+### CommandDispatcher 架构要点
+- **命令解耦**: 每个 Command 自带 name/aliases/description，注册到 CommandDispatcher 后自动匹配
+- **横幅自动生成**: bannerText() 从各 Command 的 aliases+description 自动生成启动横幅
+- **扩展方式**: 新增特殊命令只需 dispatcher.register(new Command(){...})，无需修改 main 循环
 
 ### 切换模型/API
 - **同协议模型（OpenAI 兼容）**: 修改 `config.properties` 中的 `api.url` 和 `model.name`，无需重新打包
