@@ -5,6 +5,8 @@ import me.maxt.api.ChatApiClient;
 import me.maxt.api.DeepSeekApiClient;
 import me.maxt.api.DeltaEvent;
 import me.maxt.api.DeltaHandler;
+import me.maxt.command.Command;
+import me.maxt.command.CommandDispatcher;
 import me.maxt.config.AppConfig;
 import me.maxt.model.Message;
 import me.maxt.model.TokenUsageStats;
@@ -104,20 +106,72 @@ public class SimpleAIChat {
     // ============ 主程序 ============
 
     public static void main(String[] args) {
-        System.out.println("=================================");
-        System.out.println("  简单AI对话程序 (JDK21原生实现)");
-        System.out.println("  输入 '退出' 或 'exit' 结束对话");
-        System.out.println("  输入 '对话历史' 或 'history' 查看历史对话");
-        System.out.println("  输入 '清空历史' 或 'clear' 清除历史对话");
-        System.out.println("  输入 'debug' 查看调试信息");
-        System.out.println("  输入 'tokens' 查看 Token 用量统计");
-        System.out.println("  输入 '/reload-skills' 重新加载 SKILL");
-        System.out.println("  输入 '/skill名' 触发 SKILL（如 /code-review）");
-        System.out.println("=================================\n");
-
         AppConfig config = AppConfig.load();
         ChatApiClient client = new DeepSeekApiClient(config);
         SimpleAIChat chat = new SimpleAIChat(client, config);
+
+        CommandDispatcher dispatcher = new CommandDispatcher();
+        dispatcher.register(new Command() {
+            public String name() { return "退出"; }
+            public String aliases() { return "退出,exit"; }
+            public String description() { return "结束对话"; }
+            public boolean handle(String input) {
+                System.out.println("再见！期待下次对话~");
+                return true; // exit
+            }
+        });
+        dispatcher.register(new Command() {
+            public String name() { return "对话历史"; }
+            public String aliases() { return "对话历史,history"; }
+            public String description() { return "查看历史对话"; }
+            public boolean handle(String input) {
+                System.out.println(chat.messages);
+                return false;
+            }
+        });
+        dispatcher.register(new Command() {
+            public String name() { return "清空历史"; }
+            public String aliases() { return "清空历史,clear"; }
+            public String description() { return "清除历史对话"; }
+            public boolean handle(String input) {
+                chat.messages.clear();
+                System.out.println("已清空对话历史");
+                return false;
+            }
+        });
+        dispatcher.register(new Command() {
+            public String name() { return "调试信息"; }
+            public String aliases() { return "debug"; }
+            public String description() { return "查看调试信息"; }
+            public boolean handle(String input) {
+                System.out.println(chat.apiClient.getRawResponses());
+                return false;
+            }
+        });
+        dispatcher.register(new Command() {
+            public String name() { return "Token用量"; }
+            public String aliases() { return "tokens"; }
+            public String description() { return "查看 Token 用量统计"; }
+            public boolean handle(String input) {
+                System.out.println(TokenUsageStats.summary());
+                return false;
+            }
+        });
+        dispatcher.register(new Command() {
+            public String name() { return "重载SKILL"; }
+            public String aliases() { return "/reload-skills"; }
+            public String description() { return "重新加载 SKILL"; }
+            public boolean handle(String input) {
+                chat.reloadSkills(config);
+                return false;
+            }
+        });
+
+        System.out.println("=================================");
+        System.out.println("  简单AI对话程序 (JDK21原生实现)");
+        System.out.print(dispatcher.bannerText());
+        System.out.println("  输入 '/skill名' 触发 SKILL（如 /code-review）");
+        System.out.println("=================================\n");
 
         try {
             Terminal terminal = TerminalBuilder.builder()
@@ -138,29 +192,10 @@ public class SimpleAIChat {
                 if (userInput.isEmpty()) {
                     continue;
                 }
-                if ("退出".equals(userInput) || "exit".equalsIgnoreCase(userInput)) {
-                    System.out.println("再见！期待下次对话~");
-                    break;
-                }
-                if ("对话历史".equals(userInput) || "history".equalsIgnoreCase(userInput)) {
-                    System.out.println(chat.messages);
-                    continue;
-                }
-                if ("清空历史".equals(userInput) || "clear".equalsIgnoreCase(userInput)) {
-                    chat.messages.clear();
-                    System.out.println("已清空对话历史");
-                    continue;
-                }
-                if ("debug".equals(userInput)) {
-                    System.out.println(chat.apiClient.getRawResponses());
-                    continue;
-                }
-                if ("tokens".equals(userInput)) {
-                    System.out.println(TokenUsageStats.summary());
-                    continue;
-                }
-                if ("/reload-skills".equals(userInput)) {
-                    chat.reloadSkills(config);
+
+                Boolean dispatched = dispatcher.dispatch(userInput);
+                if (dispatched != null) {
+                    if (!dispatched) break; // exit program
                     continue;
                 }
 
