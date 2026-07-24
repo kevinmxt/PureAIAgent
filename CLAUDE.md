@@ -2,6 +2,16 @@
 
 一个极简的 AI 命令行对话程序，JDK 21 原生 HTTP 客户端 + Jackson JSON，调用 DeepSeek API，支持 Function Calling 工具调用（Shell 命令执行、Excel 操作、SKILL 技能系统）。
 
+## Agent skills
+
+### Issue tracker
+
+Issues are tracked in the repo's GitHub Issues, managed via the `gh` CLI. See `docs/agents/issue-tracker.md`.
+
+### Domain docs
+
+Single-context layout: one `CONTEXT.md` + `docs/adr/` at the repo root. See `docs/agents/domain.md`.
+
 ## 快速开始
 
 - 编译: `mvn compile`
