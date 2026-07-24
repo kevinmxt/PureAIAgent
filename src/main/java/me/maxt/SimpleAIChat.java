@@ -42,6 +42,7 @@ public class SimpleAIChat {
     private final ChatApiClient apiClient;
     private final List<Message> messages = new ArrayList<>();
     private final List<Tool> tools;
+    private final TokenUsageStats tokenStats = new TokenUsageStats();
     private ToolConfirmationPolicy confirmationPolicy = new AlwaysAllowPolicy();
     private Terminal terminal;
     private LineReader reader;
@@ -107,8 +108,9 @@ public class SimpleAIChat {
 
     public static void main(String[] args) {
         AppConfig config = AppConfig.load();
-        ChatApiClient client = new DeepSeekApiClient(config);
+        DeepSeekApiClient client = new DeepSeekApiClient(config);
         SimpleAIChat chat = new SimpleAIChat(client, config);
+        client.setTokenUsageStats(chat.tokenStats);
 
         CommandDispatcher dispatcher = new CommandDispatcher();
         dispatcher.register(new Command() {
@@ -153,7 +155,7 @@ public class SimpleAIChat {
             public String aliases() { return "tokens"; }
             public String description() { return "查看 Token 用量统计"; }
             public boolean handle(String input) {
-                System.out.println(TokenUsageStats.summary());
+                System.out.println(chat.tokenStats.summary());
                 return false;
             }
         });
@@ -214,7 +216,7 @@ public class SimpleAIChat {
     // ============ 非流式对话 ============
 
     void commonResponse(String userInput) throws Exception {
-        TokenUsageStats.clearSession();
+        tokenStats.clearSession();
         messages.add(new Message("user", userInput));
 
         AgentLoop loop = new AgentLoop(apiClient, tools, confirmationPolicy, Integer.MAX_VALUE);
@@ -244,13 +246,13 @@ public class SimpleAIChat {
             System.out.println("---");
         }
         System.out.println("AI: " + (assistantMsg.getContent() != null ? assistantMsg.getContent() : ""));
-        TokenUsageStats.accumulateTotal();
+        tokenStats.accumulateTotal();
     }
 
     // ============ 流式对话 ============
 
     void streamChat(String userMessage) throws Exception {
-        TokenUsageStats.clearSession();
+        tokenStats.clearSession();
         messages.add(new Message("user", userMessage));
 
         StringBuilder contentBuilder = new StringBuilder();
@@ -289,7 +291,7 @@ public class SimpleAIChat {
             Message result = apiClient.chatStream(messages, handler);
             System.out.println();
             messages.add(result);
-            TokenUsageStats.accumulateTotal();
+            tokenStats.accumulateTotal();
         } catch (ApiException e) {
             System.out.println();
             System.out.println("API错误 (状态码: " + e.getStatusCode() + "): "

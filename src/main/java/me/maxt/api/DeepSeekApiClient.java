@@ -38,6 +38,7 @@ public class DeepSeekApiClient implements ChatApiClient {
     private final int maxTokens;
     private final HttpClient httpClient;
     private final List<String> rawResponses = new ArrayList<>();
+    private TokenUsageStats tokenStats;
 
     public DeepSeekApiClient(String apiUrl, String apiKey, String modelName, String systemPrompt) {
         this(apiUrl, apiKey, modelName, systemPrompt, 0.7, 1000);
@@ -59,6 +60,11 @@ public class DeepSeekApiClient implements ChatApiClient {
     public DeepSeekApiClient(AppConfig config) {
         this(config.getApiUrl(), config.getApiKey(), config.getModelName(),
                 config.getSystemPrompt(), config.getTemperature(), config.getMaxTokens());
+    }
+
+    /** 注入 TokenUsageStats 实例，解析 API 响应时自动累加。传 null 则不统计。 */
+    public void setTokenUsageStats(TokenUsageStats stats) {
+        this.tokenStats = stats;
     }
 
     // ============ ChatApiClient 实现 ============
@@ -220,8 +226,8 @@ public class DeepSeekApiClient implements ChatApiClient {
                     new TypeReference<List<ToolCall>>() {});
         }
 
-        if (root.has("usage")) {
-            TokenUsageStats.accumulateSession(parseUsage(root.get("usage")));
+        if (tokenStats != null && root.has("usage")) {
+            tokenStats.accumulateSession(parseUsage(root.get("usage")));
         }
 
         return new Message("assistant", content, reasoningContent, toolCalls, null);
@@ -238,8 +244,8 @@ public class DeepSeekApiClient implements ChatApiClient {
         String reasoning = delta.has("reasoning_content") && !delta.get("reasoning_content").isNull()
                 ? delta.get("reasoning_content").asText() : null;
 
-        if (chunk.has("usage")) {
-            TokenUsageStats.accumulateSession(parseUsage(chunk.get("usage")));
+        if (tokenStats != null && chunk.has("usage")) {
+            tokenStats.accumulateSession(parseUsage(chunk.get("usage")));
         }
 
         return new DeltaEvent(content, reasoning);

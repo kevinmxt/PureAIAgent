@@ -2,23 +2,22 @@ package me.maxt.model;
 
 /**
  * Token 用量统计，维护当前会话和总量两个累加器。
+ * 实例化后注入到 DeepSeekApiClient，解析 API 响应时自动累加。
  */
 public class TokenUsageStats {
 
-    private static final TokenUsage currentSessionUsage = new TokenUsage();
-    private static final TokenUsage totalUsage = new TokenUsage();
+    private final TokenUsage currentSessionUsage = new TokenUsage();
+    private final TokenUsage totalUsage = new TokenUsage();
 
-    private TokenUsageStats() {}
-
-    public static void accumulateSession(TokenUsage usage) {
+    public void accumulateSession(TokenUsage usage) {
         currentSessionUsage.add(usage);
     }
 
-    public static void accumulateTotal() {
+    public void accumulateTotal() {
         totalUsage.add(currentSessionUsage);
     }
 
-    public static void clearSession() {
+    public void clearSession() {
         currentSessionUsage.setPromptTokens(0);
         currentSessionUsage.setCompletionTokens(0);
         currentSessionUsage.setTotalTokens(0);
@@ -27,15 +26,15 @@ public class TokenUsageStats {
         currentSessionUsage.setReasoningTokens(0);
     }
 
-    public static TokenUsage getSessionUsage() {
+    public TokenUsage getSessionUsage() {
         return currentSessionUsage;
     }
 
-    public static TokenUsage getTotalUsage() {
+    public TokenUsage getTotalUsage() {
         return totalUsage;
     }
 
-    public static String summary() {
+    public String summary() {
         StringBuilder sb = new StringBuilder();
         sb.append("┌─ 当前会话用量 ─────────────────\n");
         sb.append(currentSessionUsage.toString().replaceAll("(?m)^", "│ "));
